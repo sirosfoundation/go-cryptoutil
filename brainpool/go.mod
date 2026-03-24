@@ -7,4 +7,4 @@ require (
 	github.com/sirosfoundation/go-cryptoutil v0.2.0
 )
 
-require golang.org/x/crypto v0.48.0 // indirect
+require golang.org/x/crypto v0.49.0

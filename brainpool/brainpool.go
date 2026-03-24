@@ -12,10 +12,14 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/x509"
+	"encoding/asn1"
 	"errors"
+	"math/big"
 
 	gematik "github.com/gematik/zero-lab/go/brainpool"
 	"github.com/sirosfoundation/go-cryptoutil"
+	"golang.org/x/crypto/cryptobyte"
+	cbasn1 "golang.org/x/crypto/cryptobyte/asn1"
 )
 
 // Register adds brainpool certificate parsing, signature verification,
@@ -32,21 +36,119 @@ func Register(ext *cryptoutil.Extensions) {
 // falls back to x509.ParseCertificate for non-brainpool certificates.
 func Parser(der []byte) (*x509.Certificate, error) {
 	cert, err := gematik.ParseCertificate(der)
-	if err != nil {
-		return nil, err
-	}
-	// gematik falls back to stdlib for non-brainpool certs.
-	// Check if this cert actually has a brainpool key; if not, return
-	// ErrNotHandled so the next parser in the chain can try.
-	if pub, ok := cert.PublicKey.(*ecdsa.PublicKey); ok {
-		if isBrainpool(pub.Curve) {
+	if err == nil {
+		if pub, ok := cert.PublicKey.(*ecdsa.PublicKey); ok && isBrainpool(pub.Curve) {
 			return cert, nil
 		}
+		// gematik parsed it but it's not brainpool — let others handle it.
+		return nil, cryptoutil.ErrNotHandled
 	}
-	// It was a non-brainpool cert that gematik's stdlib fallback parsed.
-	// The stdlib already failed (that's why we're here), so this shouldn't
-	// normally happen. Return ErrNotHandled to be safe.
-	return nil, cryptoutil.ErrNotHandled
+
+	// gematik failed (e.g. brainpool key signed with RSA-PSS that gematik
+	// doesn't know). Try stdlib as base, then graft the brainpool public key.
+	cert, stdErr := x509.ParseCertificate(der)
+	if stdErr == nil {
+		if cert.PublicKey != nil {
+			// stdlib parsed the public key fine — not a brainpool issue.
+			return nil, cryptoutil.ErrNotHandled
+		}
+		// cert.PublicKey is nil: stdlib couldn't parse the key. Try extracting
+		// a brainpool public key from the raw SPKI.
+		pub, extractErr := parseBrainpoolSPKI(cert.RawSubjectPublicKeyInfo)
+		if extractErr != nil {
+			return nil, cryptoutil.ErrNotHandled
+		}
+		cert.PublicKey = pub
+		return cert, nil
+	}
+
+	// Both gematik and stdlib failed. Try extracting SPKI from raw DER to check
+	// if it's a brainpool cert that neither parser could handle fully.
+	spki, spkiErr := extractSPKIFromDER(der)
+	if spkiErr != nil {
+		return nil, cryptoutil.ErrNotHandled
+	}
+	pub, extractErr := parseBrainpoolSPKI(spki)
+	if extractErr != nil {
+		return nil, cryptoutil.ErrNotHandled
+	}
+	// Construct a minimal certificate with the brainpool public key and raw DER.
+	return &x509.Certificate{
+		Raw:       der,
+		PublicKey: pub,
+	}, nil
+}
+
+// extractSPKIFromDER extracts the SubjectPublicKeyInfo from a raw DER certificate
+// by minimally walking the ASN.1 structure (Certificate → TBSCertificate → SPKI).
+func extractSPKIFromDER(der []byte) ([]byte, error) {
+	// Certificate ::= SEQUENCE { tbsCertificate, signatureAlgorithm, signature }
+	input := cryptobyte.String(der)
+	var certSeq cryptobyte.String
+	if !input.ReadASN1(&certSeq, cbasn1.SEQUENCE) {
+		return nil, errors.New("not a certificate")
+	}
+	// TBSCertificate ::= SEQUENCE { ... }
+	var tbsSeq cryptobyte.String
+	if !certSeq.ReadASN1(&tbsSeq, cbasn1.SEQUENCE) {
+		return nil, errors.New("no TBSCertificate")
+	}
+	// Skip: version (optional explicit tag 0), serialNumber, signature, issuer, validity, subject
+	// version
+	tbsSeq.SkipOptionalASN1(cbasn1.Tag(0).ContextSpecific().Constructed())
+	// serialNumber
+	if !tbsSeq.SkipASN1(cbasn1.INTEGER) {
+		return nil, errors.New("no serial")
+	}
+	// signature algorithm
+	if !tbsSeq.SkipASN1(cbasn1.SEQUENCE) {
+		return nil, errors.New("no sigAlg")
+	}
+	// issuer
+	if !tbsSeq.SkipASN1(cbasn1.SEQUENCE) {
+		return nil, errors.New("no issuer")
+	}
+	// validity
+	if !tbsSeq.SkipASN1(cbasn1.SEQUENCE) {
+		return nil, errors.New("no validity")
+	}
+	// subject
+	if !tbsSeq.SkipASN1(cbasn1.SEQUENCE) {
+		return nil, errors.New("no subject")
+	}
+	// subjectPublicKeyInfo — read as element (preserves the outer SEQUENCE tag+length)
+	var spki cryptobyte.String
+	if !tbsSeq.ReadASN1Element(&spki, cbasn1.SEQUENCE) {
+		return nil, errors.New("no SPKI")
+	}
+	return []byte(spki), nil
+}
+
+// parseBrainpoolSPKI extracts a brainpool ECDSA public key from a raw
+// SubjectPublicKeyInfo DER blob.
+func parseBrainpoolSPKI(raw []byte) (*ecdsa.PublicKey, error) {
+	var spki struct {
+		Algorithm struct {
+			Algorithm  asn1.ObjectIdentifier
+			Parameters asn1.ObjectIdentifier
+		}
+		PublicKey asn1.BitString
+	}
+	if _, err := asn1.Unmarshal(raw, &spki); err != nil {
+		return nil, err
+	}
+	ok, curve := gematik.CurveFromOID(spki.Algorithm.Parameters)
+	if !ok {
+		return nil, errors.New("not a brainpool curve")
+	}
+	keyBytes := spki.PublicKey.Bytes
+	byteLen := (curve.Params().BitSize + 7) / 8
+	if len(keyBytes) != 1+2*byteLen || keyBytes[0] != 0x04 {
+		return nil, errors.New("invalid uncompressed EC point")
+	}
+	x := new(big.Int).SetBytes(keyBytes[1 : 1+byteLen])
+	y := new(big.Int).SetBytes(keyBytes[1+byteLen:])
+	return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
 }
 
 // Verifier verifies signatures on certificates with brainpool public keys.

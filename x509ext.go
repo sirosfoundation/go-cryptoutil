@@ -45,11 +45,14 @@ func New() *Extensions {
 
 // ParseCertificate tries Go's x509.ParseCertificate first, then each
 // registered CertificateParser in order. Returns the first successful result.
+// If stdlib parses the certificate but cannot extract the public key
+// (PublicKey is nil), extension parsers are also tried.
 func (ext *Extensions) ParseCertificate(der []byte) (*x509.Certificate, error) {
 	cert, err := x509.ParseCertificate(der)
-	if err == nil {
+	if err == nil && cert.PublicKey != nil {
 		return cert, nil
 	}
+	stdCert := cert // may be non-nil with PublicKey==nil
 	stdErr := err
 	for _, p := range ext.Parsers {
 		cert, err = p(der)
@@ -60,6 +63,10 @@ func (ext *Extensions) ParseCertificate(der []byte) (*x509.Certificate, error) {
 			continue
 		}
 		return nil, err
+	}
+	// No extension parser handled it. Return whatever stdlib gave us.
+	if stdCert != nil {
+		return stdCert, nil
 	}
 	return nil, stdErr
 }

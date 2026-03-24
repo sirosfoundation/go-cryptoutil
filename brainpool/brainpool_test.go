@@ -38,10 +38,10 @@ func TestBrainpoolAlgorithmMapping(t *testing.T) {
 	Register(ext)
 
 	curves := []struct {
-		curve    func() interface{ Params() *struct{ Name string } }
-		curveFn  func() ecdsa.PublicKey
-		name     string
-		wantJWS  string
+		curve   func() interface{ Params() *struct{ Name string } }
+		curveFn func() ecdsa.PublicKey
+		name    string
+		wantJWS string
 	}{
 		{name: "brainpoolP256r1", wantJWS: "BP256R1"},
 		{name: "brainpoolP384r1", wantJWS: "BP384R1"},
@@ -195,7 +195,7 @@ func createBrainpoolCert(t *testing.T, key *ecdsa.PrivateKey) []byte {
 	// Use gematik's test approach: generate a key, serialize a minimal cert.
 	t.Logf("x509.CreateCertificate failed (expected): %v; building minimal cert", err)
 
-	// Build minimal ASN.1 cert structure  
+	// Build minimal ASN.1 cert structure
 	// This is a simplified approach — enough for test parsing
 	return buildMinimalBrainpoolCert(t, key)
 }
@@ -212,15 +212,15 @@ func buildMinimalBrainpoolCert(t *testing.T, key *ecdsa.PrivateKey) []byte {
 	// Actually, let me check if gematik has a way to create certs...
 	// It doesn't. Let me build the ASN.1 manually.
 
-	// Use a hardcoded test vector approach: generate the key, self-sign, 
+	// Use a hardcoded test vector approach: generate the key, self-sign,
 	// construct manually.
-	
+
 	// For now, trying a different approach: write out just enough ASN.1
 	// to be a parseable cert by gematik's ParseCertificate.
-	
+
 	// Construct a minimal X.509v1 certificate
 	cert := buildASN1Cert(t, key)
-	
+
 	// Verify gematik can parse it
 	parsed, err := gematik.ParseCertificate(cert)
 	if err != nil {
@@ -305,7 +305,7 @@ func buildASN1Cert(t *testing.T, key *ecdsa.PrivateKey) []byte {
 	versionExplicit := append([]byte{0xa0, byte(len(versionInt))}, versionInt...)
 
 	// Empty extensions: [3] EXPLICIT SEQUENCE {}
-	emptyExtSeq := []byte{0x30, 0x00}                                                         // SEQUENCE {}
+	emptyExtSeq := []byte{0x30, 0x00}                                          // SEQUENCE {}
 	extensions := append([]byte{0xa3, byte(len(emptyExtSeq))}, emptyExtSeq...) // [3] CONSTRUCTED
 
 	tbsInner := concat(versionExplicit, serialDER, sigAlg, issuerDER, validityDER, issuerDER, spkiDER, extensions)

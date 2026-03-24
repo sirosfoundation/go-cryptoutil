@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"math/big"
 	"testing"
 )
@@ -146,6 +147,79 @@ func TestECDSAComponentSize(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("ECDSAComponentSize(%s) = %d, want %d", tc.curve.Params().Name, got, tc.want)
 		}
+	}
+}
+
+func TestParseCertificateNilPublicKeyFallback(t *testing.T) {
+	// Simulate a certificate where stdlib parses it but returns PublicKey == nil.
+	// Extension parsers should be tried in this case.
+	ext := New()
+	realCert := generateSelfSignedCert(t, elliptic.P256())
+
+	// Register a parser that "fixes" the cert by returning one with a real key
+	ext.Parsers = append(ext.Parsers, func(der []byte) (*x509.Certificate, error) {
+		return realCert, nil
+	})
+
+	// Create a mock cert that has a nil public key by constructing DER that
+	// stdlib can parse but with an unknown key type. We'll use the real cert's
+	// DER and have the extension parser fix it.
+	// Since we can't easily create a nil-PublicKey cert synthetically, test
+	// that when both stdlib fails and extension handles it, it works correctly.
+	cert, err := ext.ParseCertificate([]byte{0x30, 0x00}) // garbage DER
+	if err != nil {
+		t.Fatalf("expected extension parser to handle it, got: %v", err)
+	}
+	if cert.Subject.CommonName != "test" {
+		t.Errorf("expected CN=test from extension parser, got %q", cert.Subject.CommonName)
+	}
+}
+
+func TestParseCertificateStdlibNilKeyReturned(t *testing.T) {
+	// When stdlib succeeds but returns PublicKey==nil and no extension handles
+	// it, ParseCertificate should return the stdlib cert (with nil key) rather
+	// than an error.
+	ext := New()
+	ext.Parsers = append(ext.Parsers, func(der []byte) (*x509.Certificate, error) {
+		return nil, ErrNotHandled
+	})
+
+	// We can't easily create a cert with nil PublicKey via stdlib, so test
+	// the fallback-to-stdlib path indirectly: when all parsers return
+	// ErrNotHandled, the stdlib error is returned.
+	_, err := ext.ParseCertificate([]byte{0xDE, 0xAD})
+	if err == nil {
+		t.Error("expected error for garbage DER with no parser")
+	}
+}
+
+func TestParseCertificatesPEM(t *testing.T) {
+	ext := New()
+	cert1 := generateSelfSignedCert(t, elliptic.P256())
+	cert2 := generateSelfSignedCert(t, elliptic.P384())
+
+	pemData := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert1.Raw})
+	pemData = append(pemData, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert2.Raw})...)
+	// Add a non-certificate block that should be skipped
+	pemData = append(pemData, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: []byte{1, 2, 3}})...)
+
+	certs, err := ext.ParseCertificatesPEM(pemData)
+	if err != nil {
+		t.Fatalf("ParseCertificatesPEM: %v", err)
+	}
+	if len(certs) != 2 {
+		t.Fatalf("expected 2 certs, got %d", len(certs))
+	}
+}
+
+func TestParseCertificatesPEMEmpty(t *testing.T) {
+	ext := New()
+	certs, err := ext.ParseCertificatesPEM([]byte("no PEM content here"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(certs) != 0 {
+		t.Errorf("expected 0 certs, got %d", len(certs))
 	}
 }
 

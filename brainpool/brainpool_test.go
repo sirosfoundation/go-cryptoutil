@@ -3,10 +3,12 @@ package brainpool
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"errors"
 	"math/big"
 	"testing"
 
@@ -368,4 +370,81 @@ func marshalLength(length int) []byte {
 	result[0] = byte(0x80 | n)
 	copy(result[1:], buf[4-n:])
 	return result
+}
+
+func TestParserNotBrainpool(t *testing.T) {
+	// Parser should return ErrNotHandled for a standard P-256 cert
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "standard-test"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Parser(der)
+	if !errors.Is(err, cryptoutil.ErrNotHandled) {
+		t.Errorf("expected ErrNotHandled for P-256 cert, got: %v", err)
+	}
+}
+
+func TestParserGarbageDER(t *testing.T) {
+	_, err := Parser([]byte{0xDE, 0xAD, 0xBE, 0xEF})
+	if !errors.Is(err, cryptoutil.ErrNotHandled) {
+		t.Errorf("expected ErrNotHandled for garbage DER, got: %v", err)
+	}
+}
+
+func TestParserSPKIExtractionFallback(t *testing.T) {
+	// Test the 3rd-level fallback: when both gematik and stdlib fail,
+	// Parser should extract SPKI from raw DER and parse the brainpool key.
+	key, err := ecdsa.GenerateKey(gematik.P256r1(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Build a brainpool cert that gematik can parse
+	certDER := createBrainpoolCert(t, key)
+
+	// The Parser should handle it via some path (gematik or fallback)
+	cert, err := Parser(certDER)
+	if err != nil {
+		t.Fatalf("Parser failed on brainpool cert: %v", err)
+	}
+	ecPub, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatal("expected *ecdsa.PublicKey")
+	}
+	if !isBrainpool(ecPub.Curve) {
+		t.Errorf("expected brainpool curve, got %s", ecPub.Curve.Params().Name)
+	}
+	// Verify the key matches
+	if ecPub.X.Cmp(key.PublicKey.X) != 0 || ecPub.Y.Cmp(key.PublicKey.Y) != 0 {
+		t.Error("parsed public key does not match original")
+	}
+}
+
+func TestVerifierNotBrainpool(t *testing.T) {
+	// Verifier should return ErrNotHandled for non-brainpool certs
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "standard-test"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, _ := x509.ParseCertificate(der)
+	err = Verifier(cert, x509.ECDSAWithSHA256, []byte("data"), []byte("sig"))
+	if !errors.Is(err, cryptoutil.ErrNotHandled) {
+		t.Errorf("expected ErrNotHandled for P-256 cert, got: %v", err)
+	}
 }

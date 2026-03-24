@@ -1,0 +1,40 @@
+on: [push, pull_request]
+name: Test
+permissions: write-all
+jobs:
+  test:
+    strategy:
+      matrix:
+        go-version: [1.24.x, 1.25.x]
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+         go-version: ${{ matrix.go-version }}
+    - name: run tests
+      run: make test
+    - name: run brainpool tests
+      run: make test-brainpool
+    - name: generate test coverage
+      run: go test ./... -coverprofile=./cover.out -covermode=atomic -coverpkg=./...
+    - name: check test coverage
+      uses: vladopajic/go-test-coverage@v2
+      with:
+        debug: true
+        config: ./.testcoverage.yml
+        git-token: ${{ github.ref_name == 'main' && secrets.GITHUB_TOKEN || '' }}
+        git-branch: badges
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+         go-version: 1.25.x
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v7
+      with:
+        version: v2.0.0

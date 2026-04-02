@@ -190,10 +190,19 @@ func TestNormalizeECDSASignature_InvalidInput(t *testing.T) {
 
 func TestNormalizeECDSASignature_Idempotent(t *testing.T) {
 	// A valid DER signature should normalize to itself (or equivalent)
-	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
 	hash := sha256.Sum256([]byte("data"))
-	r, s, _ := ecdsa.Sign(rand.Reader, priv, hash[:])
-	sig, _ := asn1.Marshal(struct{ R, S *big.Int }{r, s})
+	r, s, err := ecdsa.Sign(rand.Reader, priv, hash[:])
+	if err != nil {
+		t.Fatalf("failed to sign: %v", err)
+	}
+	sig, err := asn1.Marshal(struct{ R, S *big.Int }{r, s})
+	if err != nil {
+		t.Fatalf("failed to marshal signature: %v", err)
+	}
 
 	norm1, err := NormalizeECDSASignature(sig)
 	if err != nil {

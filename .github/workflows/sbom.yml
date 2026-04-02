@@ -21,7 +21,9 @@ jobs:
     uses: sirosfoundation/.github/.github/workflows/sbom.yml@feature/sbom-workflow
     with:
       artifact-name: go-cryptoutil
+      scan-vulnerabilities: true
       sign-sbom: false  # Enable after testing
     permissions:
       contents: write
       id-token: write
+      security-events: write

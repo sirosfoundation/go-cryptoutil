@@ -104,9 +104,12 @@ func constructBERSignature(rBytes, sBytes []byte) []byte {
 	contentLen := len(rInt) + len(sInt)
 
 	// Build SEQUENCE
-	result := make([]byte, 0, 2+contentLen)
+	// 1 byte for tag, variable number of bytes for length, then content.
+	// Reserve enough capacity for the short-form case plus a few extra bytes
+	// to avoid reallocations if long-form length is needed.
+	result := make([]byte, 0, 3+contentLen)
 	result = append(result, tagSequence)
-	result = append(result, byte(contentLen))
+	result = append(result, encodeASN1Length(contentLen)...)
 	result = append(result, rInt...)
 	result = append(result, sInt...)
 
@@ -116,10 +119,39 @@ func constructBERSignature(rBytes, sBytes []byte) []byte {
 // encodeASN1Integer encodes bytes as an ASN.1 INTEGER (preserving leading zeros)
 func encodeASN1Integer(b []byte) []byte {
 	const tagInteger = 0x02
-	result := make([]byte, 0, 2+len(b))
+	// 1 byte for tag, variable number of bytes for length, then value bytes.
+	result := make([]byte, 0, 3+len(b))
 	result = append(result, tagInteger)
-	result = append(result, byte(len(b)))
+	result = append(result, encodeASN1Length(len(b))...)
 	result = append(result, b...)
+	return result
+}
+
+// encodeASN1Length encodes a length using ASN.1 DER rules, supporting both
+// short-form (for lengths < 128) and long-form for larger lengths.
+func encodeASN1Length(n int) []byte {
+	if n < 0 {
+		// Lengths should never be negative; panic in tests to surface misuse.
+		panic("encodeASN1Length: negative length")
+	}
+	if n < 128 {
+		// Short-form length: single byte with the length value.
+		return []byte{byte(n)}
+	}
+
+	// Long-form length: big-endian encoding of n, prefixed with 0x80 | numBytes.
+	var tmp [4]byte
+	i := len(tmp)
+	value := n
+	for value > 0 && i > 0 {
+		i--
+		tmp[i] = byte(value)
+		value >>= 8
+	}
+	lengthBytes := tmp[i:]
+	result := make([]byte, 0, 1+len(lengthBytes))
+	result = append(result, 0x80|byte(len(lengthBytes)))
+	result = append(result, lengthBytes...)
 	return result
 }
 

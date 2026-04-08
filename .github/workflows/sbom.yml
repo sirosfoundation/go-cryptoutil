@@ -17,8 +17,7 @@ on:
 
 jobs:
   sbom:
-    # TODO: Change to @main after https://github.com/sirosfoundation/.github/pull/6 is merged
-    uses: sirosfoundation/.github/.github/workflows/sbom.yml@feature/sbom-workflow
+    uses: sirosfoundation/.github/.github/workflows/sbom.yml@main
     with:
       artifact-name: go-cryptoutil
       scan-vulnerabilities: true

@@ -1,0 +1,29 @@
+# SBOM Generation Workflow
+# Generates Software Bill of Materials using the reusable organization workflow
+#
+# See: https://github.com/sirosfoundation/.github/blob/main/.github/workflows/sbom.yml
+
+name: SBOM
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  sbom:
+    # TODO: Change to @main after https://github.com/sirosfoundation/.github/pull/6 is merged
+    uses: sirosfoundation/.github/.github/workflows/sbom.yml@feature/sbom-workflow
+    with:
+      artifact-name: go-cryptoutil
+      scan-vulnerabilities: true
+      sign-sbom: false  # Enable after testing
+    permissions:
+      contents: write
+      id-token: write
+      security-events: write

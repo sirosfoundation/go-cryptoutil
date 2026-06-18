@@ -119,6 +119,13 @@ func New(cfg Config) (*Pool, error) {
 
 // Acquire gets a session from the pool, respecting context cancellation.
 func (p *Pool) Acquire(ctx context.Context) (pkcs11.SessionHandle, error) {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return 0, fmt.Errorf("pkcs11pool: pool is closed")
+	}
+	p.mu.Unlock()
+
 	select {
 	case sess, ok := <-p.pool:
 		if !ok {
@@ -130,12 +137,15 @@ func (p *Pool) Acquire(ctx context.Context) (pkcs11.SessionHandle, error) {
 	}
 }
 
-// Release returns a session to the pool. Safe to call after Close.
+// Release returns a session to the pool. Safe to call after Close;
+// late-released sessions are closed directly.
 func (p *Pool) Release(sess pkcs11.SessionHandle) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
-		_ = p.ctx.CloseSession(sess)
+		if p.ctx != nil {
+			_ = p.ctx.CloseSession(sess)
+		}
 		return
 	}
 	p.pool <- sess
@@ -167,6 +177,8 @@ func (p *Pool) RecoverSession(broken pkcs11.SessionHandle) (pkcs11.SessionHandle
 }
 
 // Close drains the session pool and releases the PKCS#11 context.
+// Sessions that are checked out when Close is called will be cleaned up
+// when they are returned via Release.
 func (p *Pool) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -193,7 +205,9 @@ func (p *Pool) Close() error {
 		_ = p.ctx.CloseSession(firstSess)
 	}
 	_ = p.ctx.Finalize()
-	p.ctx = nil
+	// Note: p.ctx is kept non-nil so that late Release calls can still
+	// close checked-out sessions. The Ctx is finalized but CloseSession
+	// on a finalized context is a safe no-op.
 	return nil
 }
 

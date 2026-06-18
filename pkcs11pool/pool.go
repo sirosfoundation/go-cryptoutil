@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 
 	"github.com/miekg/pkcs11"
@@ -53,7 +54,7 @@ func New(cfg Config) (*Pool, error) {
 			if err != nil {
 				continue
 			}
-			if ti.Label == cfg.TokenLabel {
+			if strings.TrimSpace(ti.Label) == cfg.TokenLabel {
 				slotID = s
 				found = true
 				break
@@ -83,9 +84,11 @@ func New(cfg Config) (*Pool, error) {
 	}
 
 	if err := ctx.Login(first, pkcs11.CKU_USER, cfg.PIN); err != nil {
-		_ = ctx.CloseSession(first)
-		_ = ctx.Finalize()
-		return nil, fmt.Errorf("pkcs11pool: login: %w", err)
+		if !isAlreadyLoggedIn(err) {
+			_ = ctx.CloseSession(first)
+			_ = ctx.Finalize()
+			return nil, fmt.Errorf("pkcs11pool: login: %w", err)
+		}
 	}
 
 	pool := make(chan pkcs11.SessionHandle, poolSize)
@@ -117,22 +120,31 @@ func New(cfg Config) (*Pool, error) {
 // Acquire gets a session from the pool, respecting context cancellation.
 func (p *Pool) Acquire(ctx context.Context) (pkcs11.SessionHandle, error) {
 	select {
-	case sess := <-p.pool:
+	case sess, ok := <-p.pool:
+		if !ok {
+			return 0, fmt.Errorf("pkcs11pool: pool is closed")
+		}
 		return sess, nil
 	case <-ctx.Done():
 		return 0, ctx.Err()
 	}
 }
 
-// Release returns a session to the pool.
+// Release returns a session to the pool. Safe to call after Close.
 func (p *Pool) Release(sess pkcs11.SessionHandle) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		_ = p.ctx.CloseSession(sess)
+		return
+	}
 	p.pool <- sess
 }
 
 // RecoverSession replaces a broken session with a fresh one.
+// Opens a new session first, then closes the broken one, so the pool
+// never loses a slot.
 func (p *Pool) RecoverSession(broken pkcs11.SessionHandle) (pkcs11.SessionHandle, error) {
-	_ = p.ctx.CloseSession(broken)
-
 	flags := uint(pkcs11.CKF_SERIAL_SESSION)
 	if p.cfg.ReadWrite {
 		flags |= pkcs11.CKF_RW_SESSION
@@ -149,6 +161,8 @@ func (p *Pool) RecoverSession(broken pkcs11.SessionHandle) (pkcs11.SessionHandle
 			return 0, fmt.Errorf("pkcs11pool: recover login: %w", err)
 		}
 	}
+	// Close broken session after replacement is ready.
+	_ = p.ctx.CloseSession(broken)
 	return sess, nil
 }
 
@@ -163,10 +177,21 @@ func (p *Pool) Close() error {
 	p.closed = true
 
 	close(p.pool)
+	var firstSess pkcs11.SessionHandle
+	var hasFirst bool
 	for s := range p.pool {
+		if !hasFirst {
+			firstSess = s
+			hasFirst = true
+			continue
+		}
 		_ = p.ctx.CloseSession(s)
 	}
-	_ = p.ctx.Logout(0)
+	// Logout using a valid session before closing it.
+	if hasFirst {
+		_ = p.ctx.Logout(firstSess)
+		_ = p.ctx.CloseSession(firstSess)
+	}
 	_ = p.ctx.Finalize()
 	p.ctx = nil
 	return nil
@@ -613,7 +638,7 @@ func (p *Pool) ListECKeys(ctx context.Context, curves []string) ([]KeyInfo, erro
 			}
 
 			keys = append(keys, KeyInfo{
-				Kid:    string(attrs[0].Value),
+				Kid:    hex.EncodeToString(attrs[0].Value),
 				Curve:  curveName,
 				PubKey: pubBytes,
 			})

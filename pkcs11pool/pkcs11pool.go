@@ -14,7 +14,7 @@
 //	defer pool.Close()
 //
 //	// Get a crypto.Signer for an existing key:
-//	signer, err := pool.Signer(pkcs11pool.KeyByLabel("my-key"))
+//	signer, err := pkcs11pool.NewSigner(pool, pkcs11pool.KeyByLabel("my-key"))
 //
 //	// Or use the lower-level Backend interface for keygen/ECDH:
 //	kid, pubKey, err := pool.GenerateECKey(ctx, "P-256")

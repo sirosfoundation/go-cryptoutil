@@ -257,24 +257,33 @@ func TestGenerateECKeyAndSign(t *testing.T) {
 	}
 }
 
-func TestSignerAlgorithm(t *testing.T) {
+// newTestSigner creates a pool with a generated EC key and returns the pool and signer.
+// The caller must defer pool.Close().
+func newTestSigner(t *testing.T, curve string) (*Pool, *Signer) {
+	t.Helper()
 	cfg := testConfig(t)
 	pool, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer pool.Close()
 
-	ctx := context.Background()
-	kid, _, err := pool.GenerateECKey(ctx, "P-256")
+	kid, _, err := pool.GenerateECKey(context.Background(), curve)
 	if err != nil {
-		t.Fatalf("GenerateECKey: %v", err)
+		pool.Close()
+		t.Fatalf("GenerateECKey %s: %v", curve, err)
 	}
 
 	signer, err := NewSigner(pool, KeyByID([]byte(kid)))
 	if err != nil {
+		pool.Close()
 		t.Fatalf("NewSigner: %v", err)
 	}
+	return pool, signer
+}
+
+func TestSignerAlgorithm(t *testing.T) {
+	pool, signer := newTestSigner(t, "P-256")
+	defer pool.Close()
 
 	if alg := signer.Algorithm(); alg != "ES256" {
 		t.Errorf("Algorithm() = %q, want ES256", alg)
@@ -282,23 +291,8 @@ func TestSignerAlgorithm(t *testing.T) {
 }
 
 func TestGenerateECKeyP384(t *testing.T) {
-	cfg := testConfig(t)
-	pool, err := New(cfg)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	pool, signer := newTestSigner(t, "P-384")
 	defer pool.Close()
-
-	ctx := context.Background()
-	kid, _, err := pool.GenerateECKey(ctx, "P-384")
-	if err != nil {
-		t.Fatalf("GenerateECKey P-384: %v", err)
-	}
-
-	signer, err := NewSigner(pool, KeyByID([]byte(kid)))
-	if err != nil {
-		t.Fatalf("NewSigner: %v", err)
-	}
 
 	if alg := signer.Algorithm(); alg != "ES384" {
 		t.Errorf("Algorithm() = %q, want ES384", alg)

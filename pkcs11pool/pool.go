@@ -652,7 +652,9 @@ func (p *Pool) ListECKeys(ctx context.Context, curves []string) ([]KeyInfo, erro
 			}
 
 			keys = append(keys, KeyInfo{
-				Kid:    hex.EncodeToString(attrs[0].Value),
+				// CKA_ID is stored as the ASCII hex kid string (see GenerateECKey);
+				// convert bytes back to string directly — no hex re-encoding.
+				Kid:    string(attrs[0].Value),
 				Curve:  curveName,
 				PubKey: pubBytes,
 			})

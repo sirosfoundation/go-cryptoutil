@@ -72,11 +72,10 @@ func (s *Signer) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byt
 		// Attempt session recovery and retry.
 		newSession, recoverErr := s.pool.RecoverSession(session)
 		if recoverErr != nil {
-			// Recovery failed to open a replacement. The broken session
-			// was not closed by RecoverSession (it only closes after
-			// successfully opening a replacement). Close it explicitly
-			// so the pool slot is freed.
-			_ = s.pool.ctx.CloseSession(session)
+			// Recovery failed to open a replacement. Return the broken session
+			// to the pool so the pool slot is not permanently lost — the next
+			// caller will trigger a new recovery attempt and replace it.
+			s.pool.Release(session)
 			return nil, fmt.Errorf("pkcs11pool: sign failed and recovery failed: sign=%w, recover=%v", err, recoverErr)
 		}
 		session = newSession

@@ -5,6 +5,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/sirosfoundation/go-cryptoutil)](https://goreportcard.com/report/github.com/sirosfoundation/go-cryptoutil)
 ![coverage](https://raw.githubusercontent.com/sirosfoundation/go-cryptoutil/badges/.badges/main/coverage.svg)
 [![Build Status](https://github.com/sirosfoundation/go-cryptoutil/actions/workflows/test.yml/badge.svg)](https://github.com/sirosfoundation/go-cryptoutil/actions/workflows/test.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/sirosfoundation/go-cryptoutil/badge)](https://scorecard.dev/viewer/?uri=github.com/sirosfoundation/go-cryptoutil)
 [![License](https://img.shields.io/badge/License-BSD_2--Clause-orange.svg)](https://opensource.org/licenses/BSD-2-Clause)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/sirosfoundation/go-cryptoutil)](https://github.com/sirosfoundation/go-cryptoutil)
 

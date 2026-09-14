@@ -686,15 +686,26 @@ func unwrapECPoint(ecPoint []byte, curve elliptic.Curve) []byte {
 }
 
 // RawSigToASN1 converts a raw ECDSA signature (r||s) to ASN.1 DER.
-// If the input is already ASN.1 (starts with 0x30), it is returned as-is.
+//
+// CKM_ECDSA returns r and s zero-padded to the field size, so a conformant
+// module always hands back one of a few known lengths. Only a buffer of some
+// other length can be the DER that a non-conformant module returns, and it is
+// accepted only if it parses as a complete SEQUENCE of two positive INTEGERs.
+//
+// The first byte is deliberately not consulted. r is uniformly random, so a
+// raw signature starts with 0x30, the SEQUENCE tag, one time in 256; treating
+// that as "already DER" returned an unverifiable signature at that rate.
 func RawSigToASN1(raw []byte) ([]byte, error) {
-	// Some HSMs return ASN.1 DER directly.
-	if len(raw) > 2 && raw[0] == 0x30 {
-		return raw, nil
-	}
-
-	if len(raw)%2 != 0 {
-		return nil, fmt.Errorf("pkcs11pool: invalid raw signature length: %d", len(raw))
+	switch len(raw) {
+	case 48, 56, 64, 96, 132:
+		// r||s for P-192, P-224, P-256/secp256k1, P-384, P-521. Never DER.
+	default:
+		if isDERSignature(raw) {
+			return raw, nil
+		}
+		if len(raw)%2 != 0 {
+			return nil, fmt.Errorf("pkcs11pool: invalid raw signature length: %d", len(raw))
+		}
 	}
 
 	half := len(raw) / 2
@@ -705,6 +716,16 @@ func RawSigToASN1(raw []byte) ([]byte, error) {
 		R, S *big.Int
 	}
 	return asn1.Marshal(ecdsaSig{R: r, S: s})
+}
+
+// isDERSignature reports whether b is exactly one DER SEQUENCE { r, s } with
+// both integers positive and nothing trailing.
+func isDERSignature(b []byte) bool {
+	var sig struct {
+		R, S *big.Int
+	}
+	rest, err := asn1.Unmarshal(b, &sig)
+	return err == nil && len(rest) == 0 && sig.R != nil && sig.S != nil && sig.R.Sign() > 0 && sig.S.Sign() > 0
 }
 
 func isAlreadyLoggedIn(err error) bool {

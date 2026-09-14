@@ -16,6 +16,8 @@ jobs:
       run: make test
     - name: run brainpool tests
       run: make test-brainpool
+    - name: run pkcs11pool tests
+      run: make test-pkcs11pool
     - name: generate test coverage
       run: go test ./... -coverprofile=./cover.out -covermode=atomic -coverpkg=./...
     - name: check test coverage

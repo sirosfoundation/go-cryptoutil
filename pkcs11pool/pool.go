@@ -422,6 +422,23 @@ func (p *Pool) SignECDSA(session pkcs11.SessionHandle, privKey pkcs11.ObjectHand
 	return RawSigToASN1(rawSig)
 }
 
+// SignECDSAForCurve is SignECDSA with the key's curve known, which makes the
+// raw-versus-DER decision exact instead of a length heuristic.
+func (p *Pool) SignECDSAForCurve(session pkcs11.SessionHandle, privKey pkcs11.ObjectHandle, digest []byte, curve elliptic.Curve) ([]byte, error) {
+	if err := p.ctx.SignInit(session, []*pkcs11.Mechanism{
+		pkcs11.NewMechanism(pkcs11.CKM_ECDSA, nil),
+	}, privKey); err != nil {
+		return nil, fmt.Errorf("pkcs11pool: SignInit: %w", err)
+	}
+
+	rawSig, err := p.ctx.Sign(session, digest)
+	if err != nil {
+		return nil, fmt.Errorf("pkcs11pool: Sign: %w", err)
+	}
+
+	return RawSigToASN1ForCurve(rawSig, curve)
+}
+
 // SignRSAPKCS signs a pre-hashed digest using CKM_RSA_PKCS.
 func (p *Pool) SignRSAPKCS(session pkcs11.SessionHandle, privKey pkcs11.ObjectHandle, digest []byte) ([]byte, error) {
 	if err := p.ctx.SignInit(session, []*pkcs11.Mechanism{
@@ -685,18 +702,50 @@ func unwrapECPoint(ecPoint []byte, curve elliptic.Curve) []byte {
 	return ecPoint
 }
 
-// RawSigToASN1 converts a raw ECDSA signature (r||s) to ASN.1 DER.
-// If the input is already ASN.1 (starts with 0x30), it is returned as-is.
+// RawSigToASN1 converts a raw ECDSA signature (r||s) to ASN.1 DER when the
+// curve is not known. Prefer RawSigToASN1ForCurve, which is exact.
+//
+// CKM_ECDSA returns r and s zero-padded to the field size, so a conformant
+// module always hands back one of a few known lengths. Only a buffer of some
+// other length can be the DER that a non-conformant module returns, and it is
+// accepted only if it parses as a complete SEQUENCE of two positive INTEGERs.
+// The known lengths overlap across curves (a P-224 DER signature can be 64
+// bytes, a P-192 one 56), which is why the curve-aware variant exists.
+//
+// The first byte is deliberately not consulted. r is uniformly random, so a
+// raw signature starts with 0x30, the SEQUENCE tag, one time in 256; treating
+// that as "already DER" returned an unverifiable signature at that rate.
 func RawSigToASN1(raw []byte) ([]byte, error) {
-	// Some HSMs return ASN.1 DER directly.
-	if len(raw) > 2 && raw[0] == 0x30 {
+	switch len(raw) {
+	case 48, 56, 64, 96, 132:
+		// r||s for P-192, P-224, P-256/secp256k1, P-384, P-521.
+	default:
+		if isDERSignature(raw) {
+			return raw, nil
+		}
+		if len(raw)%2 != 0 {
+			return nil, fmt.Errorf("pkcs11pool: invalid raw signature length: %d", len(raw))
+		}
+	}
+	return rawToASN1(raw)
+}
+
+// RawSigToASN1ForCurve converts a raw ECDSA signature (r||s) over the given
+// curve to ASN.1 DER. A buffer of exactly twice the field size is r||s; any
+// other length is accepted only if it is a complete DER signature, for modules
+// that return DER against the PKCS#11 specification.
+func RawSigToASN1ForCurve(raw []byte, curve elliptic.Curve) ([]byte, error) {
+	n := (curve.Params().BitSize + 7) / 8
+	if len(raw) == 2*n {
+		return rawToASN1(raw)
+	}
+	if isDERSignature(raw) {
 		return raw, nil
 	}
+	return nil, fmt.Errorf("pkcs11pool: signature is %d bytes; want %d (r||s over %s) or DER", len(raw), 2*n, curve.Params().Name)
+}
 
-	if len(raw)%2 != 0 {
-		return nil, fmt.Errorf("pkcs11pool: invalid raw signature length: %d", len(raw))
-	}
-
+func rawToASN1(raw []byte) ([]byte, error) {
 	half := len(raw) / 2
 	r := new(big.Int).SetBytes(raw[:half])
 	s := new(big.Int).SetBytes(raw[half:])
@@ -705,6 +754,16 @@ func RawSigToASN1(raw []byte) ([]byte, error) {
 		R, S *big.Int
 	}
 	return asn1.Marshal(ecdsaSig{R: r, S: s})
+}
+
+// isDERSignature reports whether b is exactly one DER SEQUENCE { r, s } with
+// both integers positive and nothing trailing.
+func isDERSignature(b []byte) bool {
+	var sig struct {
+		R, S *big.Int
+	}
+	rest, err := asn1.Unmarshal(b, &sig)
+	return err == nil && len(rest) == 0 && sig.R != nil && sig.S != nil && sig.R.Sign() > 0 && sig.S.Sign() > 0
 }
 
 func isAlreadyLoggedIn(err error) bool {

@@ -19,6 +19,10 @@ test: ## Run all tests
 test-brainpool: ## Run brainpool plugin tests
 	cd brainpool && go test -v -race ./...
 
+.PHONY: test-pkcs11pool
+test-pkcs11pool: ## Run pkcs11pool module tests (nested module, not reached by ./...)
+	cd pkcs11pool && go test -v -race ./...
+
 .PHONY: coverage
 coverage: ## Generate coverage report
 	go test -coverprofile=cover.out -covermode=atomic -coverpkg=./... ./...

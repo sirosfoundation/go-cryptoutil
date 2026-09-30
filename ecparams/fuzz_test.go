@@ -74,7 +74,9 @@ func addPaddedAndBERSeeds(f *testing.F) {
 	}
 	for _, bc := range [][]byte{{0x30, 0x06, 0x01, 0x01, 0x01, 0x02, 0x01, 0x00}, {0x30, 0x02, 0x01, 0x01}, {0x30, 0x03, 0x02, 0x01, 0x01}} {
 		key, _ := ecdsa.GenerateKey(curveByName("P-256").curve, rand.Reader)
-		f.Add(encodeTBSWithBC([]byte{0x05}, oidECDSASHA256, false, mustMarshalPKIX(f, &key.PublicKey), bc))
+		tbs := encodeTBSWithBC([]byte{0x05}, oidECDSASHA256, false, mustMarshalPKIX(f, &key.PublicKey), bc)
+		sig, _ := ecdsa.SignASN1(rand.Reader, key, hashSum(sigHash(), tbs))
+		f.Add(assemble(tbs, oidECDSASHA256, false, sig)) // a whole certificate, so the seed reaches the parser
 	}
 	for _, file := range []string{"testdata/csca_are_padded_constants.pem", "testdata/csca_ukr_ber_boolean.pem"} {
 		data, err := os.ReadFile(file)

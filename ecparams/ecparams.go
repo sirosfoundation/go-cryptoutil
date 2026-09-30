@@ -21,8 +21,9 @@
 //     value).
 //   - An RSA public key whose AlgorithmIdentifier lacks the NULL parameters.
 //   - Curve constants A and B encoded with extra leading zero octets (for
-//     example 49-byte values on P-384): every explicit-parameter value is
-//     compared as a number, so padding is irrelevant but the value is not.
+//     example 49-byte values on P-384): A and B are compared as numbers, so
+//     padding is irrelevant but the value is not. The base point is still a
+//     fixed-size encoding and padding it is not accepted.
 //   - A basicConstraints extension whose cA BOOLEAN is BER-style TRUE (any
 //     non-zero octet, typically 0x01) instead of DER's 0xFF. Only that one
 //     octet is normalised for the stdlib parse; the original extension bytes

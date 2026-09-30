@@ -42,6 +42,63 @@ Separate Go module with the gematik brainpool dependency. Provides:
 - `Register(ext)` — Registers brainpool P256r1, P384r1, P512r1 certificate
   parsing, signature verification, key parsing, and algorithm mappings.
 
+### Explicit EC Parameters Plugin (`go-cryptoutil/ecparams`)
+
+Opt-in, separate Go module (it needs the gematik brainpool curves). Parses
+real-world certificates that `crypto/x509` rejects, notably ICAO 9303 eMRTD CSCA
+certificates whose SubjectPublicKeyInfo carries **explicit EC domain parameters**
+(`specifiedCurve`, RFC 3279 / X9.62) instead of a named-curve OID
+(`x509: invalid ECDSA parameters`). Nothing changes unless you call `Register`.
+
+```go
+ext := cryptoutil.New()
+brainpool.Register(ext) // optional
+ecparams.Register(ext)
+cert, err := ext.ParseCertificate(der) // cert.PublicKey is the matching *ecdsa.PublicKey
+```
+
+What it accepts:
+
+- Explicit parameters whose prime field, curve `a`/`b`, base point, order and
+  cofactor **exactly equal** those of NIST P-224/P-256/P-384/P-521 or
+  brainpoolP256r1/P384r1/P512r1 (uncompressed or compressed base point; optional
+  seed ignored; cofactor may be omitted, otherwise must be 1). The public key
+  point must be uncompressed and on the matched curve.
+- A negative serial number (`SerialNumber` carries the negative value).
+- An RSA public key whose AlgorithmIdentifier lacks the NULL parameters.
+
+What it never accepts: a self-described curve is never trusted. Unknown or
+non-matching parameters (different prime, `a`, `b`, generator, order or cofactor,
+binary fields, `implicitlyCA`, hybrid points, trailing data, twisted `t1`
+Brainpool curves, and the Brainpool curves below 256 bits, which the brainpool
+library does not provide) are declined with `ErrNotHandled`, so the certificate
+stays rejected.
+
+The returned certificate keeps the original `Raw`, `RawTBSCertificate`,
+`RawSubjectPublicKeyInfo`, `Signature` and `SignatureAlgorithm`; nothing is
+re-encoded, so signatures are checked over the original TBS. All other fields
+(names, extensions, validity) come from `crypto/x509` parsing a copy of the
+certificate in which only the offending element was replaced. `ecparams.Verifier`
+(registered by `Register`) verifies ECDSA signatures made by keys on these
+curves, in DER or raw r‖s form; with `PublicKey` set, `x509.Certificate.CheckSignature`
+also verifies them on Go's standard library.
+
+Master List integration test: `integration_test.go` parses every certificate of
+a real CSCA Master List with and without the extensions and reports counts. It
+**reads the public list at test time; nothing from it is stored in this
+repository or redistributed.** It is skipped unless opted in:
+
+```bash
+cd ecparams
+GOCRYPTOUTIL_PKD_MASTERLIST=/path/to/list.ml go test -run MasterList -v .   # local file or ZIP
+GOCRYPTOUTIL_PKD_MASTERLIST_URL=https://... go test -run MasterList -v .     # download; honours SKIP_NETWORK_TESTS
+```
+
+The ICAO PKD Master List (<https://www.icao.int/icao-pkd/icao-master-list>,
+download at <https://pkddownload.icao.int/>) is behind terms and a CAPTCHA, so
+download it by hand and use the first form. National master lists have the same
+format.
+
 ## Installation
 
 ```bash
@@ -50,6 +107,9 @@ go get github.com/sirosfoundation/go-cryptoutil
 
 # Brainpool plugin (adds gematik dependency)
 go get github.com/sirosfoundation/go-cryptoutil/brainpool
+
+# Explicit EC parameters / lenient eMRTD certificate plugin
+go get github.com/sirosfoundation/go-cryptoutil/ecparams
 ```
 
 ## Usage
@@ -99,8 +159,11 @@ go-cryptoutil/           Core module (zero deps)
 ├── ecdsa.go             ECDSA raw↔ASN.1 conversion
 ├── algorithms.go        Cross-protocol algorithm registry
 ├── keyutil.go           Extensible key parsing + helpers
-└── brainpool/           Plugin submodule
-    └── brainpool.go     Brainpool P256r1/P384r1/P512r1 support
+├── brainpool/           Plugin submodule
+│   └── brainpool.go     Brainpool P256r1/P384r1/P512r1 support
+└── ecparams/            Plugin submodule
+    ├── ecparams.go      Explicit EC parameters, negative serial, RSA without NULL
+    └── curves.go        Known-curve table (exact-match allowlist)
 ```
 
 The extension mechanism uses function types (`CertificateParser`, `SignatureVerifier`,
@@ -127,6 +190,7 @@ func Register(ext *cryptoutil.Extensions) {
 
 ```bash
 make test          # Run all tests
+make test-ecparams # Run ecparams plugin tests
 make lint          # Run golangci-lint
 make coverage      # Generate coverage report
 make check-coverage # Check coverage thresholds

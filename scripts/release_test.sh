@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests for scripts/release.sh dry-run/push logic using a temp clone with a
-# local bare "origin". Never touches the real remote. Go checks are skipped.
+# local bare "origin". Never touches the real remote. Go checks are skipped in
+# the dry-run cases and run for real (on minimal modules) in the --push case.
 set -uo pipefail
 src=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT

@@ -96,7 +96,7 @@ for t in "${tags[@]}"; do
     if git tag -a "$t" -m "go-cryptoutil $version" "$commit"; then
         created+=("$t")
     else
-        git tag -d "${created[@]}" >/dev/null
+        [ ${#created[@]} -eq 0 ] || git tag -d "${created[@]}" >/dev/null
         die "could not create tag $t; rolled back"
     fi
 done

@@ -124,6 +124,10 @@ func (s *Signer) signWith(session pkcs11.SessionHandle, digest []byte) ([]byte, 
 
 	switch s.keyType {
 	case pkcs11.CKK_EC:
+		// The signer knows its curve, so the raw-versus-DER decision is exact.
+		if pub, ok := s.publicKey.(*ecdsa.PublicKey); ok {
+			return s.pool.SignECDSAForCurve(session, privHandle, digest, pub.Curve)
+		}
 		return s.pool.SignECDSA(session, privHandle, digest)
 	case pkcs11.CKK_RSA:
 		return s.pool.SignRSAPKCS(session, privHandle, digest)

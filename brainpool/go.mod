@@ -1,10 +1,10 @@
 module github.com/sirosfoundation/go-cryptoutil/brainpool
 
-go 1.25.1
+go 1.26.4
 
 require (
-	github.com/gematik/zero-lab/go/brainpool v0.0.0-20260309133150-5b2b80ad6517
-	github.com/sirosfoundation/go-cryptoutil v0.5.0
+	github.com/gematik/zero-lab/go/brainpool v1.0.1
+	github.com/sirosfoundation/go-cryptoutil v0.6.0
 )
 
 require golang.org/x/crypto v0.54.0

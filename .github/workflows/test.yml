@@ -16,6 +16,14 @@ jobs:
       run: make test
     - name: run brainpool tests
       run: make test-brainpool
+    - name: run ecparams tests
+      run: make test-ecparams
+    - name: run pkcs11pool tests
+      run: make test-pkcs11pool
+    - name: check nested modules have no replace directives
+      run: make check-modules
+    - name: test release script
+      run: make test-release-script
     - name: generate test coverage
       run: go test ./... -coverprofile=./cover.out -covermode=atomic -coverpkg=./...
     - name: check test coverage

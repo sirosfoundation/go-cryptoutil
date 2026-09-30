@@ -2,7 +2,10 @@ package ecparams
 
 import (
 	"crypto/ecdsa"
+	"crypto/rand"
+	"encoding/pem"
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/sirosfoundation/go-cryptoutil"
@@ -13,6 +16,24 @@ func FuzzParser(f *testing.F) {
 		k := curveByName(name)
 		fx := newExplicitCert(f, k, encodeExplicitParams(k, defaultOpts(k)), []byte{0x80})
 		f.Add(fx.der)
+	}
+	// Zero-padded constants and BER-style cA BOOLEAN seeds.
+	for _, name := range []string{"P-384", "brainpoolP384r1"} {
+		k := curveByName(name)
+		o := defaultOpts(k)
+		o.padAB = 1
+		f.Add(newExplicitCertBC(f, k, encodeExplicitParams(k, o), []byte{0x05}, []byte{0x30, 0x03, 0x01, 0x01, 0x01}).der)
+	}
+	for _, bc := range [][]byte{{0x30, 0x06, 0x01, 0x01, 0x01, 0x02, 0x01, 0x00}, {0x30, 0x02, 0x01, 0x01}, {0x30, 0x03, 0x02, 0x01, 0x01}} {
+		key, _ := ecdsa.GenerateKey(curveByName("P-256").curve, rand.Reader)
+		f.Add(encodeTBSWithBC([]byte{0x05}, oidECDSASHA256, false, mustMarshalPKIX(f, &key.PublicKey), bc))
+	}
+	for _, file := range []string{"testdata/csca_are_padded_constants.pem", "testdata/csca_ukr_ber_boolean.pem"} {
+		if data, err := os.ReadFile(file); err == nil {
+			if blk, _ := pem.Decode(data); blk != nil {
+				f.Add(blk.Bytes)
+			}
+		}
 	}
 	rsaDER, _ := newRSACert(f, true)
 	f.Add(rsaDER)

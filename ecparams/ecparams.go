@@ -20,6 +20,13 @@
 //   - A negative serial number (certificate.SerialNumber is set to the negative
 //     value).
 //   - An RSA public key whose AlgorithmIdentifier lacks the NULL parameters.
+//   - Curve constants A and B encoded with extra leading zero octets (for
+//     example 49-byte values on P-384): every explicit-parameter value is
+//     compared as a number, so padding is irrelevant but the value is not.
+//   - A basicConstraints extension whose cA BOOLEAN is BER-style TRUE (any
+//     non-zero octet, typically 0x01) instead of DER's 0xFF. Only that one
+//     octet is normalised for the stdlib parse; the original extension bytes
+//     are restored on the result.
 //
 // # What is never accepted
 //
@@ -27,8 +34,10 @@
 // match a known curve exactly (including twisted Brainpool curves, curves of
 // unknown order, a wrong generator, a wrong cofactor, binary-field curves,
 // implicitlyCA, or an encoding that is not strict DER) are declined with
-// [cryptoutil.ErrNotHandled], so the certificate stays rejected. The public
-// key point must lie on the matched curve.
+// [cryptoutil.ErrNotHandled], so the certificate stays rejected; a padded
+// constant that differs from the known value is rejected like any other. Any
+// other malformed basicConstraints (truncated, wrong length, non-BOOLEAN) is
+// not repaired either. The public key point must lie on the matched curve.
 //
 // # Signatures
 //
@@ -93,8 +102,10 @@ func Parser(der []byte) (*x509.Certificate, error) {
 		serial    *big.Int
 		newSerial = c.serial
 		newSPKI   = c.spki
+		newRest   = c.rest
 		changed   bool
 		ecKey     bool
+		bcValue   []byte // original basicConstraints extension value, if repaired
 	)
 
 	if c.serialValue.Sign() < 0 {
@@ -127,11 +138,15 @@ func Parser(der []byte) (*x509.Certificate, error) {
 		newSPKI = alg.withNullParams()
 		changed = true
 	}
+	if fixed, origBC, ok := normalizeBasicConstraints(c.rest); ok {
+		newRest, bcValue = fixed, origBC
+		changed = true
+	}
 	if !changed {
 		return nil, declined("nothing to repair")
 	}
 
-	skel := rebuild(c, newSerial, newSPKI)
+	skel := rebuild(c, newSerial, newSPKI, newRest)
 	cert, err := x509.ParseCertificate(skel)
 	if err != nil {
 		return nil, declined("certificate is not repairable: %v", err)
@@ -145,6 +160,9 @@ func Parser(der []byte) (*x509.Certificate, error) {
 	cert.RawSubjectPublicKeyInfo = c.spki
 	if serial != nil {
 		cert.SerialNumber = serial
+	}
+	if bcValue != nil {
+		restoreBasicConstraints(cert, bcValue)
 	}
 	if ecKey {
 		cert.PublicKey = pub
@@ -223,9 +241,9 @@ func splitCertificate(der []byte) (*certParts, error) {
 
 // rebuild reassembles the certificate with a replacement serial and SPKI. The
 // outer signature fields are copied unchanged.
-func rebuild(c *certParts, serial, spki []byte) []byte {
+func rebuild(c *certParts, serial, spki, rest []byte) []byte {
 	var tbsBody []byte
-	for _, part := range [][]byte{c.version, serial, c.sigAlg, c.issuer, c.validity, c.subject, spki, c.rest} {
+	for _, part := range [][]byte{c.version, serial, c.sigAlg, c.issuer, c.validity, c.subject, spki, rest} {
 		tbsBody = append(tbsBody, part...)
 	}
 	var b cryptobyte.Builder
@@ -239,6 +257,77 @@ func rebuild(c *certParts, serial, spki []byte) []byte {
 		return nil
 	}
 	return out
+}
+
+var oidBasicConstraints = asn1.ObjectIdentifier{2, 5, 29, 19}
+
+// normalizeBasicConstraints looks for a basicConstraints extension whose cA
+// BOOLEAN has a non-DER TRUE value (any octet other than 0x00 and 0xFF) in the
+// optional trailing fields of the TBSCertificate (rest). If it finds one it
+// returns a copy of rest with that single octet set to 0xFF, and the original
+// extension value. No length changes. It reports false, leaving
+// everything to the stdlib, for any other shape: a missing or DER-valid
+// extension, or a malformed one (truncated, wrong length, non-BOOLEAN).
+func normalizeBasicConstraints(rest []byte) (fixed, origValue []byte, ok bool) {
+	fixed = append([]byte(nil), rest...)
+	in := cryptobyte.String(fixed) // sub-slices alias fixed, so edits write through
+	ctx3 := cbasn1.Tag(3).ContextSpecific().Constructed()
+	var extsWrap cryptobyte.String
+	for !in.Empty() {
+		var el cryptobyte.String
+		var tag cbasn1.Tag
+		if !in.ReadAnyASN1(&el, &tag) {
+			return nil, nil, false
+		}
+		if tag == ctx3 {
+			extsWrap = el
+			break
+		}
+	}
+	var exts cryptobyte.String
+	if extsWrap == nil || !extsWrap.ReadASN1(&exts, cbasn1.SEQUENCE) || !extsWrap.Empty() {
+		return nil, nil, false
+	}
+	for !exts.Empty() {
+		var ext cryptobyte.String
+		var oid asn1.ObjectIdentifier
+		if !exts.ReadASN1(&ext, cbasn1.SEQUENCE) || !ext.ReadASN1ObjectIdentifier(&oid) {
+			return nil, nil, false
+		}
+		if !oid.Equal(oidBasicConstraints) {
+			continue
+		}
+		if ext.PeekASN1Tag(cbasn1.BOOLEAN) && !ext.SkipASN1(cbasn1.BOOLEAN) {
+			return nil, nil, false
+		}
+		var value, seq, caBool cryptobyte.String
+		if !ext.ReadASN1(&value, cbasn1.OCTET_STRING) || !ext.Empty() {
+			return nil, nil, false
+		}
+		orig := append([]byte(nil), value...)
+		if !value.ReadASN1(&seq, cbasn1.SEQUENCE) || !value.Empty() ||
+			!seq.ReadASN1(&caBool, cbasn1.BOOLEAN) || len(caBool) != 1 ||
+			caBool[0] == 0x00 || caBool[0] == 0xFF {
+			return nil, nil, false
+		}
+		// Only an optional pathLenConstraint INTEGER may follow cA.
+		if seq.PeekASN1Tag(cbasn1.INTEGER) && !seq.SkipASN1(cbasn1.INTEGER) || !seq.Empty() {
+			return nil, nil, false
+		}
+		caBool[0] = 0xFF
+		return fixed, orig, true
+	}
+	return nil, nil, false
+}
+
+// restoreBasicConstraints puts the original (non-DER) extension value back on
+// the parsed certificate; crypto/x509 parsed a normalised copy.
+func restoreBasicConstraints(cert *x509.Certificate, orig []byte) {
+	for i := range cert.Extensions {
+		if cert.Extensions[i].Id.Equal(oidBasicConstraints) {
+			cert.Extensions[i].Value = orig
+		}
+	}
 }
 
 // spkiAlg is a decomposed SubjectPublicKeyInfo.
@@ -392,8 +481,7 @@ func (e *explicitParams) equals(k *knownCurve) bool {
 	if e.h != nil && (!e.h.IsInt64() || e.h.Int64() != k.h) {
 		return false
 	}
-	l := k.byteLen()
-	return fieldElementEquals(e.a, k.a, l) && fieldElementEquals(e.b, k.b, l) && basePointEquals(e.basePnt, k)
+	return fieldElementEquals(e.a, k.a) && fieldElementEquals(e.b, k.b) && basePointEquals(e.basePnt, k)
 }
 
 // matchExplicitParams decodes an ECParameters element holding a
@@ -411,10 +499,11 @@ func matchExplicitParams(el []byte) (*knownCurve, error) {
 	return nil, declined("explicit parameters match no known curve")
 }
 
-// fieldElementEquals compares an X9.62 FieldElement octet string with v. The
-// string may not be longer than the field size; leading zeros may be elided.
-func fieldElementEquals(oct []byte, v *big.Int, byteLen int) bool {
-	if len(oct) == 0 || len(oct) > byteLen {
+// fieldElementEquals compares an X9.62 FieldElement octet string with v as a
+// number: leading zero octets, whether elided or added (some issuers encode a
+// P-384 constant in 49 octets), do not matter, and the value must be exactly v.
+func fieldElementEquals(oct []byte, v *big.Int) bool {
+	if len(oct) == 0 {
 		return false
 	}
 	return new(big.Int).SetBytes(oct).Cmp(v) == 0

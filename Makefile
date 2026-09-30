@@ -19,6 +19,10 @@ test: ## Run all tests
 test-brainpool: ## Run brainpool plugin tests
 	cd brainpool && go test -v -race ./...
 
+.PHONY: test-ecparams
+test-ecparams: ## Run ecparams plugin tests
+	cd ecparams && go test -v -race ./...
+
 .PHONY: test-pkcs11pool
 test-pkcs11pool: ## Run pkcs11pool module tests (nested module, not reached by ./...)
 	cd pkcs11pool && go test -v -race ./...
@@ -64,6 +68,7 @@ vet: ## Run go vet
 tidy: ## Tidy module dependencies
 	go mod tidy
 	cd brainpool && go mod tidy
+	cd ecparams && go mod tidy
 
 .PHONY: clean
 clean: ## Remove build artifacts

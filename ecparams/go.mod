@@ -10,3 +10,5 @@ require (
 require golang.org/x/crypto v0.54.0
 
 require github.com/sirosfoundation/go-cryptoutil/brainpool v0.2.0
+
+retract v0.1.0 // published under the old per-module versioning; use the common version line

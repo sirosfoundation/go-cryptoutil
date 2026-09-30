@@ -7,7 +7,7 @@
 #     consumers, who then resolve a different (published) version than the one
 #     that was tested.
 #   * with --check-tags: requires a sibling/root module at a version that has
-#     no matching tag (so `go build -mod=readonly` would fail for consumers).
+#     no matching tag on the remote $REMOTE (default origin) (so `go build -mod=readonly` would fail for consumers).
 #
 # Usage: scripts/check-nested-modules.sh [--check-tags]
 set -euo pipefail
@@ -18,6 +18,12 @@ check_tags=0
 [ "${1:-}" = "--check-tags" ] && check_tags=1
 
 rc=0
+REMOTE=${REMOTE:-origin}
+remote_tags=
+if [ "$check_tags" = 1 ]; then
+    remote_tags=$(git ls-remote --tags "$REMOTE" | awk '{print $2}' | sed 's/\^{}$//') \
+        || { echo "ERROR: cannot list tags of remote $REMOTE" >&2; exit 1; }
+fi
 mapfile -t mods < <(find . -mindepth 2 -name go.mod -not -path './.git/*' -printf '%h\n' | sed 's|^\./||' | sort)
 
 for dir in "${mods[@]}"; do
@@ -32,8 +38,10 @@ for dir in "${mods[@]}"; do
             [ -n "$path" ] || continue
             sub=${path#"$ROOT_PATH"}; sub=${sub#/}
             tag="${sub:+$sub/}$ver"
-            if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-                echo "ERROR: $gomod requires $path $ver but tag $tag does not exist" >&2
+            # Check the remote, not the local tag namespace: a tag that only
+            # exists in this clone is not published and consumers cannot resolve it.
+            if ! grep -qxF "refs/tags/$tag" <<<"$remote_tags"; then
+                echo "ERROR: $gomod requires $path $ver but tag $tag is not published on $REMOTE" >&2
                 rc=1
             fi
         done < <(sed -nE "s|^[[:space:]]*(require[[:space:]]+)?(${ROOT_PATH}(/[^[:space:]]*)?)[[:space:]]+(v[^[:space:]]+).*|\2 \4|p" "$gomod")

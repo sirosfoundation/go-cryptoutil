@@ -55,6 +55,12 @@ git commit -qam badreq; git push -q origin HEAD:main
 expect "require of unpublished version rejected" 1 $rel v0.7.0
 git revert --no-edit HEAD >/dev/null; git push -q origin HEAD:main
 
+printf 'module %s/ecparams\n\ngo 1.26\n\nrequire %s/brainpool v0.3.0\n' "$R" "$R" > ecparams/go.mod
+git tag brainpool/v0.3.0
+git commit -qam localreq; git push -q origin HEAD:main
+expect "require of local-only tag rejected" 1 $rel v0.7.0
+git tag -d brainpool/v0.3.0 >/dev/null; git revert --no-edit HEAD >/dev/null; git push -q origin HEAD:main
+
 git checkout -q -b other
 expect "not on main" 1 $rel v0.7.0
 git checkout -q main

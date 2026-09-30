@@ -66,13 +66,23 @@ What it accepts:
   point must be uncompressed and on the matched curve.
 - A negative serial number (`SerialNumber` carries the negative value).
 - An RSA public key whose AlgorithmIdentifier lacks the NULL parameters.
+- Zero-padded curve constants: the curve `a` and `b` octet strings are compared
+  as numbers, so a leading `0x00` pad (for example the 49-byte `a`/`b` of the UAE
+  CSCA 02 certificate on P-384) still matches; the value must still equal the
+  known one exactly.
+- A `basicConstraints` extension whose `cA` BOOLEAN is BER-style TRUE (any
+  non-zero octet, for example `0x01` as in CSCA-UKRAINE) instead of DER's `0xFF`.
+  Only that octet is normalised for the `crypto/x509` parse; the original
+  extension bytes, `Raw` and `RawTBSCertificate` are kept.
 
 What it never accepts: a self-described curve is never trusted. Unknown or
 non-matching parameters (different prime, `a`, `b`, generator, order or cofactor,
 binary fields, `implicitlyCA`, hybrid points, trailing data, twisted `t1`
 Brainpool curves, and the Brainpool curves below 256 bits, which the brainpool
 library does not provide) are declined with `ErrNotHandled`, so the certificate
-stays rejected.
+stays rejected. A padded constant that differs from the known value, padding on
+the base point, and any other malformed `basicConstraints` (truncated, wrong
+BOOLEAN length, non-BOOLEAN `cA`, trailing data) are not repaired either.
 
 The returned certificate keeps the original `Raw`, `RawTBSCertificate`,
 `RawSubjectPublicKeyInfo`, `Signature` and `SignatureAlgorithm`; nothing is

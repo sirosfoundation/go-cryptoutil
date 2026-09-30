@@ -24,6 +24,7 @@ type paramOpts struct {
 	cofactor   *int64 // nil: omit
 	seed       bool
 	trailing   bool
+	padAB      int // extra leading 0x00 octets on the A and B field elements
 }
 
 func defaultOpts(k *knownCurve) paramOpts {
@@ -52,8 +53,9 @@ func encodeExplicitParams(k *knownCurve, o paramOpts) []byte {
 			b.AddASN1BigInt(o.p)
 		})
 		b.AddASN1(cbasn1.SEQUENCE, func(b *cryptobyte.Builder) {
-			b.AddASN1OctetString(pad(o.a, l))
-			b.AddASN1OctetString(pad(o.b, l))
+			zeros := make([]byte, o.padAB)
+			b.AddASN1OctetString(append(append([]byte(nil), zeros...), pad(o.a, l)...))
+			b.AddASN1OctetString(append(append([]byte(nil), zeros...), pad(o.b, l)...))
 			if o.seed {
 				b.AddASN1BitString([]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 			}
@@ -136,6 +138,11 @@ func encodeName(cn string) []byte {
 // encodeTBS builds a v3 TBSCertificate (with a basicConstraints CA extension)
 // around the given raw serial INTEGER content, signature-algorithm OID and SPKI.
 func encodeTBS(serial []byte, sigOID asn1.ObjectIdentifier, sigNull bool, spki []byte) []byte {
+	return encodeTBSWithBC(serial, sigOID, sigNull, spki, []byte{0x30, 0x03, 0x01, 0x01, 0xff})
+}
+
+// encodeTBSWithBC is encodeTBS with a caller-chosen basicConstraints value.
+func encodeTBSWithBC(serial []byte, sigOID asn1.ObjectIdentifier, sigNull bool, spki, bcValue []byte) []byte {
 	var b cryptobyte.Builder
 	b.AddASN1(cbasn1.SEQUENCE, func(b *cryptobyte.Builder) {
 		b.AddASN1(cbasn1.Tag(0).ContextSpecific().Constructed(), func(b *cryptobyte.Builder) { b.AddASN1Int64(2) })
@@ -159,7 +166,7 @@ func encodeTBS(serial []byte, sigOID asn1.ObjectIdentifier, sigNull bool, spki [
 				b.AddASN1(cbasn1.SEQUENCE, func(b *cryptobyte.Builder) {
 					b.AddASN1ObjectIdentifier(asn1.ObjectIdentifier{2, 5, 29, 19})
 					b.AddASN1Boolean(true)
-					b.AddASN1OctetString([]byte{0x30, 0x03, 0x01, 0x01, 0xff})
+					b.AddASN1OctetString(bcValue)
 				})
 			})
 		})
@@ -207,12 +214,18 @@ type ecFixture struct {
 // (hand-encoded). The key is generated on k.
 func newExplicitCert(t testing.TB, k *knownCurve, params []byte, serial []byte) *ecFixture {
 	t.Helper()
+	return newExplicitCertBC(t, k, params, serial, []byte{0x30, 0x03, 0x01, 0x01, 0xff})
+}
+
+// newExplicitCertBC is newExplicitCert with a caller-chosen basicConstraints value.
+func newExplicitCertBC(t testing.TB, k *knownCurve, params []byte, serial, bcValue []byte) *ecFixture {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(k.curve, rand.Reader)
 	if err != nil {
 		t.Fatalf("generate key on %s: %v", k.name, err)
 	}
 	sigOID, hash, algo := sigAlgFor(k)
-	tbs := encodeTBS(serial, sigOID, false, explicitSPKI(k, &key.PublicKey, params))
+	tbs := encodeTBSWithBC(serial, sigOID, false, explicitSPKI(k, &key.PublicKey, params), bcValue)
 	sig, err := ecdsa.SignASN1(rand.Reader, key, hashSum(hash, tbs))
 	if err != nil {
 		t.Fatalf("sign: %v", err)

@@ -35,6 +35,9 @@ skip_go=${RELEASE_SKIP_GO_CHECKS:-0}
 
 [[ $version =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
     || die "version '$version' is not plain semver vX.Y.Z"
+# Go requires a /vN module path suffix for v2 and later; these modules have
+# none, so only v0.x.y and v1.x.y tags can resolve.
+[[ $version =~ ^v[01]\. ]] || die "major version ${version%%.*} needs a /vN module path suffix; only v0 and v1 are supported"
 [ "$push" = 0 ] || [ "$skip_go" = 0 ] || die "RELEASE_SKIP_GO_CHECKS is not allowed with --push"
 
 export GOWORK=off

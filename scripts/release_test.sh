@@ -33,6 +33,7 @@ echo "$out" | grep -q 'ecparams/v0.7.0' && echo "$out" | grep -q 'brainpool/v0.7
     && [ -z "$(git tag -l v0.7.0)" ] && ok "dry run lists tags, creates none" || bad "dry run output: $out"
 expect "not semver" 1 $rel 0.7.0
 expect "prerelease rejected" 1 $rel v0.7.0-rc1
+expect "v2 rejected (needs /v2 module path)" 1 $rel v2.0.0
 expect "not greater than existing" 1 $rel v0.6.0
 expect "older than nested tag" 1 $rel v0.1.5
 expect "skip checks refused with --push" 1 $rel v0.7.0 --push

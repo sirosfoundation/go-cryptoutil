@@ -76,13 +76,23 @@ printf 'package x\n' > x.go; printf 'package x\n' > brainpool/x.go; printf 'pack
 printf 'module %s/brainpool\n\ngo 1.26\n' "$R" > brainpool/go.mod
 printf 'module %s/ecparams\n\ngo 1.26\n' "$R" > ecparams/go.mod
 git add -A; git commit -qm code; git push -q origin HEAD:main
-expect "push release" 0 $rel v0.7.0 --push
+# Mock gh on PATH to check the post-push workflow dispatch.
+mkdir -p "$tmp/bin"; export GH_LOG="$tmp/gh.log"; : > "$GH_LOG"
+printf '#!/bin/sh\necho "$*" >> "$GH_LOG"\n[ -z "$GH_FAIL" ]\n' > "$tmp/bin/gh"; chmod +x "$tmp/bin/gh"
+unset RELEASE_NO_DISPATCH
+PATH="$tmp/bin:$PATH" expect "push release" 0 $rel v0.7.0 --push
+grep -qxF 'workflow run release.yml --ref main -f tag=v0.7.0' "$GH_LOG" && ok "release workflow dispatched after push" || bad "dispatch missing: $(cat "$GH_LOG")"
 want="v0.7.0 brainpool/v0.7.0 ecparams/v0.7.0"
 got=$(git ls-remote --tags origin | grep -v '\^{}$' | sed -E 's|.*refs/tags/||' | grep -E '^(v|[a-z]+/v)0\.7\.0$' | sort | tr '\n' ' ')
 [ "$got" = "$(echo $want | tr ' ' '\n' | sort | tr '\n' ' ')" ] && ok "tags pushed to fake remote" || bad "remote tags: $got"
 c=$(git rev-parse 'v0.7.0^{commit}'); [ "$(git rev-parse 'ecparams/v0.7.0^{commit}')" = "$c" ] && ok "same commit" || bad "commit mismatch"
 [ "$(git cat-file -t v0.7.0)" = tag ] && ok "annotated" || bad "not annotated"
 expect "re-release rejected" 1 $rel v0.7.0
+# A failing dispatch is not fatal (tags are already published) and prints the fallback.
+git commit -q --allow-empty -m next-release; git push -q origin HEAD:main
+out=$(GH_FAIL=1 PATH="$tmp/bin:$PATH" $rel v0.7.1 --push 2>&1); rc=$?
+[ "$rc" = 0 ] && echo "$out" | grep -q 'gh workflow run release.yml --ref main -f tag=v0.7.1' \
+    && ok "failed dispatch is non-fatal and prints fallback" || bad "failed dispatch (rc=$rc): $out"
 
 # --- scripts/check-release-tags.sh (what the release workflow runs) ----------
 chk=scripts/check-release-tags.sh

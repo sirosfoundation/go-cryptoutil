@@ -17,24 +17,7 @@ func FuzzParser(f *testing.F) {
 		fx := newExplicitCert(f, k, encodeExplicitParams(k, defaultOpts(k)), []byte{0x80})
 		f.Add(fx.der)
 	}
-	// Zero-padded constants and BER-style cA BOOLEAN seeds.
-	for _, name := range []string{"P-384", "brainpoolP384r1"} {
-		k := curveByName(name)
-		o := defaultOpts(k)
-		o.padAB = 1
-		f.Add(newExplicitCertBC(f, k, encodeExplicitParams(k, o), []byte{0x05}, []byte{0x30, 0x03, 0x01, 0x01, 0x01}).der)
-	}
-	for _, bc := range [][]byte{{0x30, 0x06, 0x01, 0x01, 0x01, 0x02, 0x01, 0x00}, {0x30, 0x02, 0x01, 0x01}, {0x30, 0x03, 0x02, 0x01, 0x01}} {
-		key, _ := ecdsa.GenerateKey(curveByName("P-256").curve, rand.Reader)
-		f.Add(encodeTBSWithBC([]byte{0x05}, oidECDSASHA256, false, mustMarshalPKIX(f, &key.PublicKey), bc))
-	}
-	for _, file := range []string{"testdata/csca_are_padded_constants.pem", "testdata/csca_ukr_ber_boolean.pem"} {
-		if data, err := os.ReadFile(file); err == nil {
-			if blk, _ := pem.Decode(data); blk != nil {
-				f.Add(blk.Bytes)
-			}
-		}
-	}
+	addPaddedAndBERSeeds(f)
 	rsaDER, _ := newRSACert(f, true)
 	f.Add(rsaDER)
 	f.Add([]byte{})
@@ -78,4 +61,28 @@ func FuzzMatchExplicitParams(f *testing.F) {
 			t.Fatal("bad match")
 		}
 	})
+}
+
+// addPaddedAndBERSeeds seeds the corpus with zero-padded constants, BER-style
+// cA BOOLEANs and the real certificates of sirosfoundation/go-cryptoutil#36.
+func addPaddedAndBERSeeds(f *testing.F) {
+	for _, name := range []string{"P-384", "brainpoolP384r1"} {
+		k := curveByName(name)
+		o := defaultOpts(k)
+		o.padAB = 1
+		f.Add(newExplicitCertBC(f, k, encodeExplicitParams(k, o), []byte{0x05}, []byte{0x30, 0x03, 0x01, 0x01, 0x01}).der)
+	}
+	for _, bc := range [][]byte{{0x30, 0x06, 0x01, 0x01, 0x01, 0x02, 0x01, 0x00}, {0x30, 0x02, 0x01, 0x01}, {0x30, 0x03, 0x02, 0x01, 0x01}} {
+		key, _ := ecdsa.GenerateKey(curveByName("P-256").curve, rand.Reader)
+		f.Add(encodeTBSWithBC([]byte{0x05}, oidECDSASHA256, false, mustMarshalPKIX(f, &key.PublicKey), bc))
+	}
+	for _, file := range []string{"testdata/csca_are_padded_constants.pem", "testdata/csca_ukr_ber_boolean.pem"} {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		if blk, _ := pem.Decode(data); blk != nil {
+			f.Add(blk.Bytes)
+		}
+	}
 }

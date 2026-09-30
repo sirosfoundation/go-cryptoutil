@@ -270,22 +270,8 @@ var oidBasicConstraints = asn1.ObjectIdentifier{2, 5, 29, 19}
 // extension, or a malformed one (truncated, wrong length, non-BOOLEAN).
 func normalizeBasicConstraints(rest []byte) (fixed, origValue []byte, ok bool) {
 	fixed = append([]byte(nil), rest...)
-	in := cryptobyte.String(fixed) // sub-slices alias fixed, so edits write through
-	ctx3 := cbasn1.Tag(3).ContextSpecific().Constructed()
-	var extsWrap cryptobyte.String
-	for !in.Empty() {
-		var el cryptobyte.String
-		var tag cbasn1.Tag
-		if !in.ReadAnyASN1(&el, &tag) {
-			return nil, nil, false
-		}
-		if tag == ctx3 {
-			extsWrap = el
-			break
-		}
-	}
-	var exts cryptobyte.String
-	if extsWrap == nil || !extsWrap.ReadASN1(&exts, cbasn1.SEQUENCE) || !extsWrap.Empty() {
+	exts, ok := readExtensions(fixed) // sub-slices alias fixed, so edits write through
+	if !ok {
 		return nil, nil, false
 	}
 	for !exts.Empty() {
@@ -297,27 +283,60 @@ func normalizeBasicConstraints(rest []byte) (fixed, origValue []byte, ok bool) {
 		if !oid.Equal(oidBasicConstraints) {
 			continue
 		}
-		if ext.PeekASN1Tag(cbasn1.BOOLEAN) && !ext.SkipASN1(cbasn1.BOOLEAN) {
+		orig, ok := patchBasicConstraints(ext)
+		if !ok {
 			return nil, nil, false
 		}
-		var value, seq, caBool cryptobyte.String
-		if !ext.ReadASN1(&value, cbasn1.OCTET_STRING) || !ext.Empty() {
-			return nil, nil, false
-		}
-		orig := append([]byte(nil), value...)
-		if !value.ReadASN1(&seq, cbasn1.SEQUENCE) || !value.Empty() ||
-			!seq.ReadASN1(&caBool, cbasn1.BOOLEAN) || len(caBool) != 1 ||
-			caBool[0] == 0x00 || caBool[0] == 0xFF {
-			return nil, nil, false
-		}
-		// Only an optional pathLenConstraint INTEGER may follow cA.
-		if seq.PeekASN1Tag(cbasn1.INTEGER) && !seq.SkipASN1(cbasn1.INTEGER) || !seq.Empty() {
-			return nil, nil, false
-		}
-		caBool[0] = 0xFF
 		return fixed, orig, true
 	}
 	return nil, nil, false
+}
+
+// readExtensions returns the contents of the [3] EXPLICIT extensions SEQUENCE
+// among the optional trailing TBSCertificate fields.
+func readExtensions(rest cryptobyte.String) (cryptobyte.String, bool) {
+	ctx3 := cbasn1.Tag(3).ContextSpecific().Constructed()
+	for !rest.Empty() {
+		var el cryptobyte.String
+		var tag cbasn1.Tag
+		if !rest.ReadAnyASN1(&el, &tag) {
+			return nil, false
+		}
+		if tag != ctx3 {
+			continue
+		}
+		var exts cryptobyte.String
+		if !el.ReadASN1(&exts, cbasn1.SEQUENCE) || !el.Empty() {
+			return nil, false
+		}
+		return exts, true
+	}
+	return nil, false
+}
+
+// patchBasicConstraints takes the remainder of a basicConstraints Extension
+// after its OID. If its cA BOOLEAN is a non-DER TRUE it sets that octet to 0xFF
+// in place and returns the original extension value.
+func patchBasicConstraints(ext cryptobyte.String) (orig []byte, ok bool) {
+	if ext.PeekASN1Tag(cbasn1.BOOLEAN) && !ext.SkipASN1(cbasn1.BOOLEAN) {
+		return nil, false
+	}
+	var value, seq, caBool cryptobyte.String
+	if !ext.ReadASN1(&value, cbasn1.OCTET_STRING) || !ext.Empty() {
+		return nil, false
+	}
+	orig = append([]byte(nil), value...)
+	if !value.ReadASN1(&seq, cbasn1.SEQUENCE) || !value.Empty() ||
+		!seq.ReadASN1(&caBool, cbasn1.BOOLEAN) || len(caBool) != 1 ||
+		caBool[0] == 0x00 || caBool[0] == 0xFF {
+		return nil, false
+	}
+	// Only an optional pathLenConstraint INTEGER may follow cA.
+	if seq.PeekASN1Tag(cbasn1.INTEGER) && !seq.SkipASN1(cbasn1.INTEGER) || !seq.Empty() {
+		return nil, false
+	}
+	caBool[0] = 0xFF
+	return orig, true
 }
 
 // restoreBasicConstraints puts the original (non-DER) extension value back on

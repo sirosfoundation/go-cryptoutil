@@ -134,16 +134,47 @@ func newNamedCurveCertBC(t *testing.T, bc []byte) (der []byte, key *ecdsa.Privat
 	return assemble(tbs, oidECDSASHA256, false, sig), key
 }
 
+// requireStdlibRejects checks the precondition that crypto/x509 rejects der
+// with the given message, and that an Extensions without Register does too.
+func requireStdlibRejects(t *testing.T, der []byte, msg string) {
+	t.Helper()
+	if _, err := x509.ParseCertificate(der); err == nil || !strings.Contains(err.Error(), msg) {
+		t.Fatalf("stdlib error = %v, want %q", err, msg)
+	}
+	if _, err := cryptoutil.New().ParseCertificate(der); err == nil {
+		t.Fatal("parsed without Register")
+	}
+}
+
+func mustSelfSigned(t *testing.T, cert *x509.Certificate) {
+	t.Helper()
+	if err := registered().CheckSignature(cert, cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature); err != nil {
+		t.Errorf("self-signature: %v", err)
+	}
+}
+
+func mustNotVerify(t *testing.T, der []byte) {
+	t.Helper()
+	c, err := registered().ParseCertificate(der)
+	if err != nil {
+		return // rejected outright
+	}
+	if err := registered().CheckSignature(c, c.SignatureAlgorithm, c.RawTBSCertificate, c.Signature); err == nil {
+		t.Error("tampered certificate verified")
+	}
+}
+
+func flipped(der []byte, idx int) []byte {
+	out := append([]byte(nil), der...)
+	out[idx] ^= 1
+	return out
+}
+
 func TestBERBooleanBasicConstraints(t *testing.T) {
 	for name, bc := range bcValues() {
 		t.Run(name, func(t *testing.T) {
 			der, key := newNamedCurveCertBC(t, bc)
-			if _, err := x509.ParseCertificate(der); err == nil || !strings.Contains(err.Error(), "invalid basic constraints") {
-				t.Fatalf("test precondition: stdlib error = %v", err)
-			}
-			if _, err := cryptoutil.New().ParseCertificate(der); err == nil {
-				t.Fatal("parsed without Register")
-			}
+			requireStdlibRejects(t, der, "invalid basic constraints")
 			cert, err := registered().ParseCertificate(der)
 			if err != nil {
 				t.Fatalf("ParseCertificate: %v", err)
@@ -152,9 +183,7 @@ func TestBERBooleanBasicConstraints(t *testing.T) {
 			if pub, ok := cert.PublicKey.(*ecdsa.PublicKey); !ok || !pub.Equal(&key.PublicKey) {
 				t.Error("public key mismatch")
 			}
-			if err := registered().CheckSignature(cert, cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature); err != nil {
-				t.Errorf("self-signature: %v", err)
-			}
+			mustSelfSigned(t, cert)
 		})
 	}
 }
@@ -172,24 +201,26 @@ func checkBERBooleanCert(t *testing.T, der, bc []byte, cert *x509.Certificate) {
 	if !bytes.Contains(cert.RawTBSCertificate, bc) {
 		t.Error("RawTBSCertificate was changed")
 	}
-	found := false
-	for _, e := range cert.Extensions {
-		if e.Id.Equal(oidBasicConstraints) {
-			found = true
-			if !bytes.Equal(e.Value, bc) {
-				t.Errorf("extension value = %x, want original %x", e.Value, bc)
-			}
-		}
-	}
-	if !found {
-		t.Error("no basicConstraints extension")
-	}
+	checkBCValue(t, cert, bc)
 	if len(bc) == 8 {
 		want := int(bc[7])
 		if cert.MaxPathLen != want || (want == 0 && !cert.MaxPathLenZero) {
 			t.Errorf("MaxPathLen = %d (zero=%v), want %d", cert.MaxPathLen, cert.MaxPathLenZero, want)
 		}
 	}
+}
+
+func checkBCValue(t *testing.T, cert *x509.Certificate, bc []byte) {
+	t.Helper()
+	for _, e := range cert.Extensions {
+		if e.Id.Equal(oidBasicConstraints) {
+			if !bytes.Equal(e.Value, bc) {
+				t.Errorf("extension value = %x, want original %x", e.Value, bc)
+			}
+			return
+		}
+	}
+	t.Error("no basicConstraints extension")
 }
 
 func TestBERBooleanWithExplicitParameters(t *testing.T) {
@@ -313,12 +344,7 @@ func checkDigest(t *testing.T, der []byte, want string) {
 func TestRealWorldUAECSCA02(t *testing.T) {
 	der, data := readTestPEM(t, "testdata/csca_are_padded_constants.pem")
 	checkDigest(t, der, "d0e477b5de01ee68dedbbf5992e66c7091e7134df0449939f496fe7ca64361fb")
-	if _, err := x509.ParseCertificate(der); err == nil || !strings.Contains(err.Error(), "invalid ECDSA parameters") {
-		t.Fatalf("stdlib error = %v", err)
-	}
-	if _, err := cryptoutil.New().ParseCertificate(der); err == nil {
-		t.Fatal("parsed without Register")
-	}
+	requireStdlibRejects(t, der, "invalid ECDSA parameters")
 	a, err := parseSPKIAlgorithm(mustSplit(t, der).spki)
 	if err != nil {
 		t.Fatal(err)
@@ -336,9 +362,7 @@ func TestRealWorldUAECSCA02(t *testing.T) {
 	if !ok || pub.Curve.Params().Name != "P-384" {
 		t.Fatalf("key = %T", cert.PublicKey)
 	}
-	if err := registered().CheckSignature(cert, cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature); err != nil {
-		t.Errorf("self-signature: %v", err)
-	}
+	mustSelfSigned(t, cert)
 	if err := Verifier(cert, cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature); err != nil {
 		t.Errorf("Verifier: %v", err)
 	}
@@ -348,20 +372,8 @@ func TestRealWorldUAECSCA02(t *testing.T) {
 	tamperOctets(t, der, e.a, func(b []byte) { b[len(b)-1] ^= 1 })
 	tamperOctets(t, der, e.b, func(b []byte) { b[len(b)-1] ^= 1 })
 	tamperOctets(t, der, e.b, func(b []byte) { b[0] = 0x01 }) // padding octet becomes significant
-	sigTampered := append([]byte(nil), der...)
-	sigTampered[len(sigTampered)-1] ^= 1
-	if c, err := registered().ParseCertificate(sigTampered); err == nil {
-		if err := registered().CheckSignature(c, c.SignatureAlgorithm, c.RawTBSCertificate, c.Signature); err == nil {
-			t.Error("tampered signature verified")
-		}
-	}
-	tbsTampered := append([]byte(nil), der...)
-	tbsTampered[bytes.Index(tbsTampered, []byte("UAE CSCA 02"))] ^= 1
-	if c, err := registered().ParseCertificate(tbsTampered); err == nil {
-		if err := registered().CheckSignature(c, c.SignatureAlgorithm, c.RawTBSCertificate, c.Signature); err == nil {
-			t.Error("tampered TBS verified")
-		}
-	}
+	mustNotVerify(t, flipped(der, len(der)-1))
+	mustNotVerify(t, flipped(der, bytes.Index(der, []byte("UAE CSCA 02"))))
 }
 
 func mustSplit(t *testing.T, der []byte) *certParts {
@@ -396,12 +408,7 @@ func tamperOctets(t *testing.T, der, octets []byte, mod func([]byte)) {
 func TestRealWorldUkraineCSCA(t *testing.T) {
 	der, data := readTestPEM(t, "testdata/csca_ukr_ber_boolean.pem")
 	checkDigest(t, der, "6a1f5136b12017c1721cf547cc8c5aa5d11383f14cdf2443f94817924f6b6016")
-	if _, err := x509.ParseCertificate(der); err == nil || !strings.Contains(err.Error(), "invalid basic constraints") {
-		t.Fatalf("stdlib error = %v", err)
-	}
-	if _, err := cryptoutil.New().ParseCertificate(der); err == nil {
-		t.Fatal("parsed without Register")
-	}
+	requireStdlibRejects(t, der, "invalid basic constraints")
 	certs, err := registered().ParseCertificatesPEM(data)
 	if err != nil || len(certs) != 1 {
 		t.Fatalf("parse: %v (%d)", err, len(certs))
@@ -411,9 +418,7 @@ func TestRealWorldUkraineCSCA(t *testing.T) {
 	if string(cert.RawIssuer) != string(cert.RawSubject) {
 		t.Fatal("fixture is not self-issued")
 	}
-	if err := registered().CheckSignature(cert, cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature); err != nil {
-		t.Errorf("self-signature: %v", err)
-	}
+	mustSelfSigned(t, cert)
 
 	// Tampered variants.
 	bc := []byte{0x30, 0x06, 0x01, 0x01, 0x01, 0x02, 0x01, 0x00}
@@ -437,24 +442,12 @@ func TestRealWorldUkraineCSCA(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	// A repaired certificate whose signature was altered still fails to verify,
-	// and so does one whose TBS was altered.
-	sigBad := append([]byte(nil), der...)
-	sigBad[len(sigBad)-1] ^= 1
-	c, err := registered().ParseCertificate(sigBad)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := registered().CheckSignature(c, c.SignatureAlgorithm, c.RawTBSCertificate, c.Signature); err == nil {
-		t.Error("tampered signature verified")
-	}
-	tbsBad := append([]byte(nil), der...)
-	tbsBad[bytes.Index(tbsBad, []byte("CSCA-UKRAINE"))] ^= 1
-	c, err = registered().ParseCertificate(tbsBad)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := registered().CheckSignature(c, c.SignatureAlgorithm, c.RawTBSCertificate, c.Signature); err == nil {
-		t.Error("tampered TBS verified")
+	// A repaired certificate whose signature or TBS was altered still fails to verify.
+	for _, idx := range []int{len(der) - 1, bytes.Index(der, []byte("CSCA-UKRAINE"))} {
+		bad := flipped(der, idx)
+		if _, err := registered().ParseCertificate(bad); err != nil {
+			t.Fatal(err)
+		}
+		mustNotVerify(t, bad)
 	}
 }

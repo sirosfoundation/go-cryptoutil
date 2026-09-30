@@ -1,7 +1,9 @@
 package ecparams
 
 import (
+	"bytes"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -487,9 +489,6 @@ func TestSplitAndSPKIErrors(t *testing.T) {
 	if a := (&spkiAlg{}); a.withNullParams() == nil {
 		t.Log("withNullParams on empty alg returned nil")
 	}
-	if ok, _ := negativeSerial(nil); ok {
-		t.Error("empty serial reported negative")
-	}
 }
 
 // TestRealWorldCSCA parses two public eMRTD CSCA certificates with explicit
@@ -545,4 +544,58 @@ func checkRealWorld(t *testing.T, file, curve string) {
 func rsaEqual(got any, want *rsa.PublicKey) bool {
 	p, ok := got.(*rsa.PublicKey)
 	return ok && p.N.Cmp(want.N) == 0 && p.E == want.E
+}
+
+// fakeCurve claims a known curve's name but is a different implementation.
+type fakeCurve struct{ elliptic.Curve }
+
+func TestVerifierIgnoresSpoofedCurves(t *testing.T) {
+	k := mustCurve(t, "P-256")
+	key := mustKey(t)
+	msg := []byte("m")
+	sig, _ := ecdsa.SignASN1(rand.Reader, key, hashSum(sigHash(), msg))
+
+	// A key claiming a known curve name via a foreign implementation is verified
+	// against the trusted table curve (and still verifies when genuinely valid).
+	spoof := &ecdsa.PublicKey{Curve: fakeCurve{k.curve}, X: key.X, Y: key.Y} //nolint:staticcheck // SA1019: test needs raw coordinates
+	if err := Verifier(&x509.Certificate{PublicKey: spoof}, x509.ECDSAWithSHA256, msg, sig); err != nil {
+		t.Errorf("genuine point on spoofed-curve wrapper: %v", err)
+	}
+	// A point that is not on the claimed curve is refused, not handed to the
+	// foreign implementation.
+	off := &ecdsa.PublicKey{Curve: fakeCurve{k.curve}, X: big.NewInt(1), Y: big.NewInt(1)} //nolint:staticcheck // SA1019: test needs raw coordinates
+	if err := Verifier(&x509.Certificate{PublicKey: off}, x509.ECDSAWithSHA256, msg, sig); err == nil || errors.Is(err, cryptoutil.ErrNotHandled) {
+		t.Errorf("off-curve point: %v", err)
+	}
+	if err := Verifier(&x509.Certificate{PublicKey: &ecdsa.PublicKey{Curve: k.curve}}, x509.ECDSAWithSHA256, msg, sig); err == nil {
+		t.Error("missing coordinates accepted")
+	}
+}
+
+func TestNonMinimalSerialNotRepaired(t *testing.T) {
+	key := mustKey(t)
+	// 02 02 ff 80 is a non-minimal encoding of -128.
+	spki := mustMarshalPKIX(t, &key.PublicKey)
+	der := assemble(encodeTBS([]byte{0xff, 0x80}, oidECDSASHA256, false, spki), oidECDSASHA256, false, []byte{1})
+	if _, err := Parser(der); !errors.Is(err, cryptoutil.ErrNotHandled) {
+		t.Errorf("non-minimal serial: %v", err)
+	}
+}
+
+func TestMalformedSeedRejected(t *testing.T) {
+	k := mustCurve(t, "P-256")
+	good := encodeExplicitParams(k, func() paramOpts { o := defaultOpts(k); o.seed = true; return o }())
+	if _, err := matchExplicitParams(good); err != nil {
+		t.Fatalf("valid seed: %v", err)
+	}
+	// Corrupt the seed's unused-bits octet (0x00 -> 0x09): BIT STRING tag 0x03, len 11.
+	i := bytes.Index(good, []byte{0x03, 0x0b, 0x00})
+	if i < 0 {
+		t.Fatal("seed not found")
+	}
+	bad := append([]byte(nil), good...)
+	bad[i+2] = 0x09
+	if _, err := matchExplicitParams(bad); !errors.Is(err, cryptoutil.ErrNotHandled) {
+		t.Errorf("bad seed unused-bits: %v", err)
+	}
 }

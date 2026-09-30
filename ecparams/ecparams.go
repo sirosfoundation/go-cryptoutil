@@ -97,8 +97,8 @@ func Parser(der []byte) (*x509.Certificate, error) {
 		ecKey     bool
 	)
 
-	if neg, v := negativeSerial(c.serialContent); neg {
-		serial = v
+	if c.serialValue.Sign() < 0 {
+		serial = c.serialValue
 		newSerial = []byte{0x02, 0x01, 0x01}
 		changed = true
 	}
@@ -155,18 +155,18 @@ func Parser(der []byte) (*x509.Certificate, error) {
 
 // certParts holds the raw elements (tag and length included) of a certificate.
 type certParts struct {
-	tbs           []byte // whole TBSCertificate element
-	version       []byte // optional
-	serial        []byte // INTEGER element
-	serialContent []byte
-	sigAlg        []byte // TBS signature AlgorithmIdentifier
-	issuer        []byte
-	validity      []byte
-	subject       []byte
-	spki          []byte
-	rest          []byte // issuerUID, subjectUID, extensions
-	outerSigAlg   []byte
-	outerSig      []byte
+	tbs         []byte   // whole TBSCertificate element
+	version     []byte   // optional
+	serial      []byte   // INTEGER element
+	serialValue *big.Int // strictly decoded (DER-minimal) serial number
+	sigAlg      []byte   // TBS signature AlgorithmIdentifier
+	issuer      []byte
+	validity    []byte
+	subject     []byte
+	spki        []byte
+	rest        []byte // issuerUID, subjectUID, extensions
+	outerSigAlg []byte
+	outerSig    []byte
 }
 
 func splitCertificate(der []byte) (*certParts, error) {
@@ -212,12 +212,12 @@ func splitCertificate(der []byte) (*certParts, error) {
 	c.serial, c.sigAlg, c.issuer, c.validity, c.subject, c.spki = serial, sigAlg, issuer, validity, subject, spki
 	c.rest = tbs
 
+	// ReadASN1Integer enforces minimal DER INTEGER encoding and two's complement.
 	sc := serial
-	var content cryptobyte.String
-	if !sc.ReadASN1(&content, cbasn1.INTEGER) || len(content) == 0 {
+	c.serialValue = new(big.Int)
+	if !sc.ReadASN1Integer(c.serialValue) {
 		return nil, errors.New("bad serial number")
 	}
-	c.serialContent = content
 	return &c, nil
 }
 
@@ -239,17 +239,6 @@ func rebuild(c *certParts, serial, spki []byte) []byte {
 		return nil
 	}
 	return out
-}
-
-// negativeSerial reports whether the INTEGER content is a negative number
-// (two's complement) and returns its value.
-func negativeSerial(content []byte) (bool, *big.Int) {
-	if len(content) == 0 || content[0]&0x80 == 0 {
-		return false, nil
-	}
-	v := new(big.Int).SetBytes(content)
-	v.Sub(v, new(big.Int).Lsh(big.NewInt(1), uint(8*len(content))))
-	return true, v
 }
 
 // spkiAlg is a decomposed SubjectPublicKeyInfo.
@@ -349,8 +338,11 @@ func readCurve(seq *cryptobyte.String) (a, b []byte, ok bool) {
 		!curve.ReadASN1(&bOct, cbasn1.OCTET_STRING) {
 		return nil, nil, false
 	}
-	if curve.PeekASN1Tag(cbasn1.BIT_STRING) && !curve.SkipASN1(cbasn1.BIT_STRING) {
-		return nil, nil, false
+	if curve.PeekASN1Tag(cbasn1.BIT_STRING) {
+		var seed asn1.BitString
+		if !curve.ReadASN1BitString(&seed) {
+			return nil, nil, false
+		}
 	}
 	return aOct, bOct, curve.Empty()
 }
@@ -469,9 +461,20 @@ func parsePoint(k *knownCurve, bits asn1.BitString) (*ecdsa.PublicKey, error) {
 // [cryptoutil.ErrNotHandled] for any other key or algorithm.
 func Verifier(cert *x509.Certificate, algo x509.SignatureAlgorithm, signed, signature []byte) error {
 	pub, ok := cert.PublicKey.(*ecdsa.PublicKey)
-	if !ok || pub.Curve == nil || curveByName(pub.Curve.Params().Name) == nil {
+	if !ok || pub.Curve == nil || pub.Params() == nil {
 		return cryptoutil.ErrNotHandled
 	}
+	// A curve name is only a label: resolve the trusted table entry, check the
+	// point against the table's parameters, and verify with the table's own
+	// curve implementation rather than whatever pub.Curve is.
+	k := curveByName(pub.Curve.Params().Name)
+	if k == nil {
+		return cryptoutil.ErrNotHandled
+	}
+	if pub.X == nil || pub.Y == nil || !k.onCurve(pub.X, pub.Y) { //nolint:staticcheck // SA1019: raw coordinates needed for custom curves
+		return errors.New("cryptoutil/ecparams: public key is not on the claimed curve")
+	}
+	pub = &ecdsa.PublicKey{Curve: k.curve, X: pub.X, Y: pub.Y} //nolint:staticcheck // SA1019: custom-curve keys can only be built from raw coordinates
 	var hash crypto.Hash
 	switch algo {
 	case x509.ECDSAWithSHA1:

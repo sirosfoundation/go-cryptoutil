@@ -45,7 +45,7 @@ func loadMasterList(t *testing.T) []byte {
 	case path != "":
 		b, err := os.ReadFile(path)
 		if err != nil {
-			t.Skipf("cannot read GOCRYPTOUTIL_PKD_MASTERLIST: %v", err)
+			t.Fatalf("cannot read GOCRYPTOUTIL_PKD_MASTERLIST (explicitly configured): %v", err)
 		}
 		data = b
 	case url != "":
@@ -72,15 +72,15 @@ func loadMasterList(t *testing.T) []byte {
 	if bytes.HasPrefix(data, []byte("PK\x03\x04")) {
 		zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 		if err != nil || len(zr.File) == 0 {
-			t.Skipf("unreadable ZIP: %v", err)
+			t.Fatalf("unreadable ZIP: %v", err)
 		}
 		rc, err := zr.File[0].Open()
 		if err != nil {
-			t.Skipf("unreadable ZIP entry: %v", err)
+			t.Fatalf("unreadable ZIP entry: %v", err)
 		}
 		defer rc.Close()
 		if data, err = io.ReadAll(io.LimitReader(rc, maxMasterListSize)); err != nil {
-			t.Skipf("unreadable ZIP entry: %v", err)
+			t.Fatalf("unreadable ZIP entry: %v", err)
 		}
 	}
 	return data

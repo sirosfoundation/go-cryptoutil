@@ -70,7 +70,7 @@ printf 'module %s/ecparams\n\ngo 1.26\n' "$R" > ecparams/go.mod
 git add -A; git commit -qm code; git push -q origin HEAD:main
 expect "push release" 0 $rel v0.7.0 --push
 want="v0.7.0 brainpool/v0.7.0 ecparams/v0.7.0"
-got=$(git ls-remote --tags origin | sed -E 's|.*refs/tags/||' | grep -E '^(v|[a-z]+/v)0\.7\.0$' | sort | tr '\n' ' ')
+got=$(git ls-remote --tags origin | grep -v '\^{}$' | sed -E 's|.*refs/tags/||' | grep -E '^(v|[a-z]+/v)0\.7\.0$' | sort | tr '\n' ' ')
 [ "$got" = "$(echo $want | tr ' ' '\n' | sort | tr '\n' ' ')" ] && ok "tags pushed to fake remote" || bad "remote tags: $got"
 c=$(git rev-parse 'v0.7.0^{commit}'); [ "$(git rev-parse 'ecparams/v0.7.0^{commit}')" = "$c" ] && ok "same commit" || bad "commit mismatch"
 [ "$(git cat-file -t v0.7.0)" = tag ] && ok "annotated" || bad "not annotated"

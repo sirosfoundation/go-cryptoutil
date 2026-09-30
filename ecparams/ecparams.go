@@ -321,9 +321,43 @@ func dummySPKI() ([]byte, error) {
 	return out, nil
 }
 
-// matchExplicitParams decodes an ECParameters element holding a
-// SpecifiedECDomain and returns the known curve it equals exactly.
-func matchExplicitParams(el []byte) (*knownCurve, error) {
+// explicitParams is a decoded SpecifiedECDomain (X9.62 ECParameters).
+type explicitParams struct {
+	p, n    *big.Int
+	h       *big.Int // nil when omitted
+	a, b    []byte   // FieldElement octet strings
+	basePnt []byte
+}
+
+// readFieldID reads FieldID ::= SEQUENCE { fieldType OID, parameters INTEGER }
+// for a prime field and returns the prime.
+func readFieldID(seq *cryptobyte.String) (*big.Int, bool) {
+	var fieldID cryptobyte.String
+	var fieldType asn1.ObjectIdentifier
+	p := new(big.Int)
+	ok := seq.ReadASN1(&fieldID, cbasn1.SEQUENCE) &&
+		fieldID.ReadASN1ObjectIdentifier(&fieldType) && fieldType.Equal(oidPrimeField) &&
+		fieldID.ReadASN1Integer(p) && fieldID.Empty() && p.Sign() > 0
+	return p, ok
+}
+
+// readCurve reads Curve ::= SEQUENCE { a, b OCTET STRING, seed BIT STRING OPTIONAL }.
+func readCurve(seq *cryptobyte.String) (a, b []byte, ok bool) {
+	var curve, aOct, bOct cryptobyte.String
+	if !seq.ReadASN1(&curve, cbasn1.SEQUENCE) ||
+		!curve.ReadASN1(&aOct, cbasn1.OCTET_STRING) ||
+		!curve.ReadASN1(&bOct, cbasn1.OCTET_STRING) {
+		return nil, nil, false
+	}
+	if curve.PeekASN1Tag(cbasn1.BIT_STRING) && !curve.SkipASN1(cbasn1.BIT_STRING) {
+		return nil, nil, false
+	}
+	return aOct, bOct, curve.Empty()
+}
+
+// parseExplicitParams strictly decodes an ECParameters element holding a
+// SpecifiedECDomain over a prime field.
+func parseExplicitParams(el []byte) (*explicitParams, error) {
 	in := cryptobyte.String(el)
 	var seq cryptobyte.String
 	if !in.ReadASN1(&seq, cbasn1.SEQUENCE) || !in.Empty() {
@@ -333,64 +367,54 @@ func matchExplicitParams(el []byte) (*knownCurve, error) {
 	if !seq.ReadASN1Integer(&version) || version != 1 {
 		return nil, declined("unsupported ECParameters version")
 	}
-
-	// FieldID ::= SEQUENCE { fieldType OID, parameters ANY }
-	var fieldID cryptobyte.String
-	var fieldType asn1.ObjectIdentifier
-	p := new(big.Int)
-	if !seq.ReadASN1(&fieldID, cbasn1.SEQUENCE) ||
-		!fieldID.ReadASN1ObjectIdentifier(&fieldType) || !fieldType.Equal(oidPrimeField) ||
-		!fieldID.ReadASN1Integer(p) || !fieldID.Empty() || p.Sign() <= 0 {
+	e := &explicitParams{n: new(big.Int)}
+	var ok bool
+	if e.p, ok = readFieldID(&seq); !ok {
 		return nil, declined("not a prime field")
 	}
-
-	// Curve ::= SEQUENCE { a OCTET STRING, b OCTET STRING, seed BIT STRING OPTIONAL }
-	var curve, aOct, bOct cryptobyte.String
-	if !seq.ReadASN1(&curve, cbasn1.SEQUENCE) ||
-		!curve.ReadASN1(&aOct, cbasn1.OCTET_STRING) ||
-		!curve.ReadASN1(&bOct, cbasn1.OCTET_STRING) {
+	if e.a, e.b, ok = readCurve(&seq); !ok {
 		return nil, declined("malformed curve coefficients")
 	}
-	if curve.PeekASN1Tag(cbasn1.BIT_STRING) && !curve.SkipASN1(cbasn1.BIT_STRING) {
-		return nil, declined("malformed curve seed")
-	}
-	if !curve.Empty() {
-		return nil, declined("trailing data in curve")
-	}
-
 	var base cryptobyte.String
-	n := new(big.Int)
-	if !seq.ReadASN1(&base, cbasn1.OCTET_STRING) || !seq.ReadASN1Integer(n) || n.Sign() <= 0 {
+	if !seq.ReadASN1(&base, cbasn1.OCTET_STRING) || !seq.ReadASN1Integer(e.n) || e.n.Sign() <= 0 {
 		return nil, declined("malformed base point or order")
 	}
-	var h *big.Int
+	e.basePnt = base
 	if !seq.Empty() {
-		h = new(big.Int)
-		if !seq.ReadASN1Integer(h) {
+		e.h = new(big.Int)
+		if !seq.ReadASN1Integer(e.h) {
 			return nil, declined("malformed cofactor")
 		}
 	}
 	if !seq.Empty() {
 		return nil, declined("trailing data in ECParameters")
 	}
+	return e, nil
+}
 
+// equals reports whether the decoded parameters are exactly those of k.
+func (e *explicitParams) equals(k *knownCurve) bool {
+	if e.p.Cmp(k.p) != 0 || e.n.Cmp(k.n) != 0 {
+		return false
+	}
+	if e.h != nil && (!e.h.IsInt64() || e.h.Int64() != k.h) {
+		return false
+	}
+	l := k.byteLen()
+	return fieldElementEquals(e.a, k.a, l) && fieldElementEquals(e.b, k.b, l) && basePointEquals(e.basePnt, k)
+}
+
+// matchExplicitParams decodes an ECParameters element holding a
+// SpecifiedECDomain and returns the known curve it equals exactly.
+func matchExplicitParams(el []byte) (*knownCurve, error) {
+	e, err := parseExplicitParams(el)
+	if err != nil {
+		return nil, err
+	}
 	for _, k := range known() {
-		if p.Cmp(k.p) != 0 {
-			continue
+		if e.equals(k) {
+			return k, nil
 		}
-		if !fieldElementEquals(aOct, k.a, k.byteLen()) || !fieldElementEquals(bOct, k.b, k.byteLen()) {
-			continue
-		}
-		if n.Cmp(k.n) != 0 {
-			continue
-		}
-		if h != nil && (!h.IsInt64() || h.Int64() != k.h) {
-			continue
-		}
-		if !basePointEquals(base, k) {
-			continue
-		}
-		return k, nil
 	}
 	return nil, declined("explicit parameters match no known curve")
 }

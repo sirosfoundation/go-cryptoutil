@@ -20,6 +20,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # SonarCloud needs Go coverage reports to evaluate coverage on new code.
+      # Nested modules are not reached by ./... so each gets its own profile.
+      - name: Generate coverage reports
+        run: |
+          for d in . brainpool ecparams pkcs11pool; do
+            (cd "$d" && go test -coverprofile=cover.out -covermode=atomic ./...)
+          done
+
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:
@@ -28,3 +40,4 @@ jobs:
           args: >
             -Dsonar.organization=${{ github.repository_owner }}
             -Dsonar.projectKey=${{ github.repository_owner }}_${{ github.event.repository.name }}
+            -Dsonar.go.coverage.reportPaths=cover.out,brainpool/cover.out,ecparams/cover.out,pkcs11pool/cover.out

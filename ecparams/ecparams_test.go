@@ -66,61 +66,69 @@ func TestExplicitParametersParseAndVerify(t *testing.T) {
 			if _, err := cryptoutil.New().ParseCertificate(fx.der); err == nil {
 				t.Fatal("unregistered Extensions must keep rejecting the certificate")
 			}
-
 			cert, err := registered().ParseCertificate(fx.der)
 			if err != nil {
 				t.Fatalf("ParseCertificate: %v", err)
 			}
-			pub, ok := cert.PublicKey.(*ecdsa.PublicKey)
-			if !ok {
-				t.Fatalf("PublicKey is %T", cert.PublicKey)
-			}
-			if !pub.Equal(&fx.key.PublicKey) || pub.Curve.Params().Name != name {
-				t.Error("public key does not match the generated key / curve")
-			}
-			if cert.PublicKeyAlgorithm != x509.ECDSA {
-				t.Errorf("PublicKeyAlgorithm = %v", cert.PublicKeyAlgorithm)
-			}
-			if string(cert.Raw) != string(fx.der) || string(cert.RawTBSCertificate) != string(fx.tbs) ||
-				string(cert.Signature) != string(fx.sig) || cert.SignatureAlgorithm != fx.algo {
-				t.Error("original Raw/TBS/Signature/SignatureAlgorithm were not preserved")
-			}
-			if !strings.Contains(cert.Subject.String(), "Test CSCA") || !cert.IsCA || cert.SerialNumber.Int64() != 5 {
-				t.Errorf("other fields not populated: subject=%q ca=%v serial=%v", cert.Subject, cert.IsCA, cert.SerialNumber)
-			}
-			if a, err := parseSPKIAlgorithm(cert.RawSubjectPublicKeyInfo); err != nil || a.paramsTag != 0x30 {
-				t.Error("RawSubjectPublicKeyInfo is not the original explicit-parameter SPKI")
-			}
-
-			// Self-signature over the ORIGINAL TBS.
-			if err := registered().CheckSignature(cert, cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature); err != nil {
-				t.Errorf("self-signature: %v", err)
-			}
-			// Signatures made by the key (DER and raw r||s) verify via Extensions.
-			msg := []byte("hello eMRTD")
-			_, hash, algo := sigAlgFor(k)
-			sig, err := ecdsa.SignASN1(rand.Reader, fx.key, hashSum(hash, msg))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := registered().CheckSignature(cert, algo, msg, sig); err != nil {
-				t.Errorf("CheckSignature (DER): %v", err)
-			}
-			raw, err := cryptoutil.ECDSAASN1ToRaw(sig, (k.p.BitLen()+7)/8)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := registered().CheckSignature(cert, algo, msg, raw); err != nil {
-				t.Errorf("CheckSignature (raw): %v", err)
-			}
-			if err := registered().CheckSignature(cert, algo, []byte("other"), sig); err == nil {
-				t.Error("signature over different data verified")
-			}
-			// Report (not assert) whether stdlib alone could verify, see README.
-			stdErr := cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature)
-			t.Logf("stdlib-only CheckSignature: %v", stdErr)
+			checkParsedFields(t, fx, cert)
+			checkSignatures(t, fx, cert)
 		})
 	}
+}
+
+func checkParsedFields(t *testing.T, fx *ecFixture, cert *x509.Certificate) {
+	t.Helper()
+	pub, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("PublicKey is %T", cert.PublicKey)
+	}
+	if !pub.Equal(&fx.key.PublicKey) || pub.Curve.Params().Name != fx.k.name {
+		t.Error("public key does not match the generated key / curve")
+	}
+	if cert.PublicKeyAlgorithm != x509.ECDSA {
+		t.Errorf("PublicKeyAlgorithm = %v", cert.PublicKeyAlgorithm)
+	}
+	if string(cert.Raw) != string(fx.der) || string(cert.RawTBSCertificate) != string(fx.tbs) ||
+		string(cert.Signature) != string(fx.sig) || cert.SignatureAlgorithm != fx.algo {
+		t.Error("original Raw/TBS/Signature/SignatureAlgorithm were not preserved")
+	}
+	if !strings.Contains(cert.Subject.String(), "Test CSCA") || !cert.IsCA || cert.SerialNumber.Int64() != 5 {
+		t.Errorf("other fields not populated: subject=%q ca=%v serial=%v", cert.Subject, cert.IsCA, cert.SerialNumber)
+	}
+	if a, err := parseSPKIAlgorithm(cert.RawSubjectPublicKeyInfo); err != nil || a.paramsTag != 0x30 {
+		t.Error("RawSubjectPublicKeyInfo is not the original explicit-parameter SPKI")
+	}
+}
+
+func checkSignatures(t *testing.T, fx *ecFixture, cert *x509.Certificate) {
+	t.Helper()
+	ext := registered()
+	// Self-signature over the ORIGINAL TBS.
+	if err := ext.CheckSignature(cert, cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature); err != nil {
+		t.Errorf("self-signature: %v", err)
+	}
+	// Signatures made by the key (DER and raw r||s) verify via Extensions.
+	msg := []byte("hello eMRTD")
+	_, hash, algo := sigAlgFor(fx.k)
+	sig, err := ecdsa.SignASN1(rand.Reader, fx.key, hashSum(hash, msg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ext.CheckSignature(cert, algo, msg, sig); err != nil {
+		t.Errorf("CheckSignature (DER): %v", err)
+	}
+	raw, err := cryptoutil.ECDSAASN1ToRaw(sig, fx.k.byteLen())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ext.CheckSignature(cert, algo, msg, raw); err != nil {
+		t.Errorf("CheckSignature (raw): %v", err)
+	}
+	if err := ext.CheckSignature(cert, algo, []byte("other"), sig); err == nil {
+		t.Error("signature over different data verified")
+	}
+	// Report (not assert) whether stdlib alone could verify, see README.
+	t.Logf("stdlib-only CheckSignature: %v", cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature))
 }
 
 func TestAlternativeEncodings(t *testing.T) {
@@ -192,33 +200,38 @@ func TestNonMatchingParametersRejected(t *testing.T) {
 		})
 	}
 
-	t.Run("wrong curve key point", func(t *testing.T) {
-		// Correct P-256 parameters, but the public key is not on P-256.
-		other, err := ecdsa.GenerateKey(bp.curve, rand.Reader)
-		if err != nil {
-			t.Fatal(err)
-		}
-		params := encodeExplicitParams(k, defaultOpts(k))
-		spki := encodeSPKI(ecAlgBytes(params), append(append([]byte{0x04}, pad(other.X, 32)...), pad(other.Y, 32)...))
-		der := assemble(encodeTBS([]byte{1}, oidECDSASHA256, false, spki), oidECDSASHA256, false, []byte{1, 2, 3})
+}
+
+func TestKeyPointNotOnCurveRejected(t *testing.T) {
+	k := mustCurve(t, "P-256")
+	bp := mustCurve(t, "brainpoolP256r1")
+	// Correct P-256 parameters, but the public key is not on P-256.
+	other, err := ecdsa.GenerateKey(bp.curve, rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := encodeExplicitParams(k, defaultOpts(k))
+	spki := encodeSPKI(ecAlgBytes(params), append(append([]byte{0x04}, pad(other.X, 32)...), pad(other.Y, 32)...)) //nolint:staticcheck // SA1019: raw coordinates needed
+	der := assemble(encodeTBS([]byte{1}, oidECDSASHA256, false, spki), oidECDSASHA256, false, []byte{1, 2, 3})
+	if _, err := Parser(der); !errors.Is(err, cryptoutil.ErrNotHandled) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestOddKeyEncodingsRejected(t *testing.T) {
+	k := mustCurve(t, "P-256")
+	params := encodeExplicitParams(k, defaultOpts(k))
+	for name, pt := range map[string][]byte{
+		"compressed": append([]byte{0x02}, pad(k.gx, 32)...),
+		"empty":      {},
+		"infinity":   {0x00},
+		"truncated":  append([]byte{0x04}, pad(k.gx, 32)...),
+	} {
+		der := assemble(encodeTBS([]byte{1}, oidECDSASHA256, false, encodeSPKI(ecAlgBytes(params), pt)), oidECDSASHA256, false, []byte{1})
 		if _, err := Parser(der); !errors.Is(err, cryptoutil.ErrNotHandled) {
-			t.Errorf("err = %v", err)
+			t.Errorf("%s: err = %v", name, err)
 		}
-	})
-	t.Run("compressed and odd key encodings", func(t *testing.T) {
-		params := encodeExplicitParams(k, defaultOpts(k))
-		for name, pt := range map[string][]byte{
-			"compressed": append([]byte{0x02}, pad(k.gx, 32)...),
-			"empty":      {},
-			"infinity":   {0x00},
-			"truncated":  append([]byte{0x04}, pad(k.gx, 32)...),
-		} {
-			der := assemble(encodeTBS([]byte{1}, oidECDSASHA256, false, encodeSPKI(ecAlgBytes(params), pt)), oidECDSASHA256, false, []byte{1})
-			if _, err := Parser(der); !errors.Is(err, cryptoutil.ErrNotHandled) {
-				t.Errorf("%s: err = %v", name, err)
-			}
-		}
-	})
+	}
 }
 
 func TestTamperedCertificateFailsVerification(t *testing.T) {
@@ -295,44 +308,13 @@ func TestStdlibValidCertificatesDeclined(t *testing.T) {
 }
 
 func TestNegativeSerial(t *testing.T) {
-	k := mustCurve(t, "P-256")
 	// -128 (0x80), and a longer negative value.
 	for name, serial := range map[string][]byte{"-128": {0x80}, "long": {0xff, 0x01, 0x02, 0x03}} {
-		want := new(big.Int).SetBytes(serial)
-		want.Sub(want, new(big.Int).Lsh(big.NewInt(1), uint(8*len(serial))))
-
-		t.Run("named curve "+name, func(t *testing.T) {
-			key, err := ecdsa.GenerateKey(k.curve, rand.Reader)
-			if err != nil {
-				t.Fatal(err)
-			}
-			spki := mustMarshalPKIX(t, &key.PublicKey)
-			tbs := encodeTBS(serial, oidECDSASHA256, false, spki)
-			sig, _ := ecdsa.SignASN1(rand.Reader, key, hashSum(sigHash(), tbs))
-			der := assemble(tbs, oidECDSASHA256, false, sig)
-			if _, err := x509.ParseCertificate(der); err == nil || !strings.Contains(err.Error(), "negative serial") {
-				t.Fatalf("precondition: stdlib error = %v", err)
-			}
-			if _, err := cryptoutil.New().ParseCertificate(der); err == nil {
-				t.Fatal("negative serial accepted without Register")
-			}
-			cert, err := registered().ParseCertificate(der)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if cert.SerialNumber.Cmp(want) != 0 {
-				t.Errorf("serial = %v, want %v", cert.SerialNumber, want)
-			}
-			if string(cert.Raw) != string(der) || string(cert.RawTBSCertificate) != string(tbs) {
-				t.Error("raw bytes not preserved")
-			}
-			if err := cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature); err != nil {
-				t.Errorf("self-signature: %v", err)
-			}
-		})
+		t.Run("named curve "+name, func(t *testing.T) { checkNegativeSerialNamedCurve(t, serial) })
 	}
 
 	t.Run("negative serial and explicit parameters", func(t *testing.T) {
+		k := mustCurve(t, "P-256")
 		fx := newExplicitCert(t, k, encodeExplicitParams(k, defaultOpts(k)), []byte{0x80})
 		cert, err := registered().ParseCertificate(fx.der)
 		if err != nil {
@@ -342,6 +324,39 @@ func TestNegativeSerial(t *testing.T) {
 			t.Errorf("serial = %v", cert.SerialNumber)
 		}
 	})
+}
+
+func checkNegativeSerialNamedCurve(t *testing.T, serial []byte) {
+	t.Helper()
+	want := new(big.Int).SetBytes(serial)
+	want.Sub(want, new(big.Int).Lsh(big.NewInt(1), uint(8*len(serial))))
+
+	key := mustKey(t)
+	tbs := encodeTBS(serial, oidECDSASHA256, false, mustMarshalPKIX(t, &key.PublicKey))
+	sig, err := ecdsa.SignASN1(rand.Reader, key, hashSum(sigHash(), tbs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	der := assemble(tbs, oidECDSASHA256, false, sig)
+	if _, err := x509.ParseCertificate(der); err == nil || !strings.Contains(err.Error(), "negative serial") {
+		t.Fatalf("precondition: stdlib error = %v", err)
+	}
+	if _, err := cryptoutil.New().ParseCertificate(der); err == nil {
+		t.Fatal("negative serial accepted without Register")
+	}
+	cert, err := registered().ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cert.SerialNumber.Cmp(want) != 0 {
+		t.Errorf("serial = %v, want %v", cert.SerialNumber, want)
+	}
+	if string(cert.Raw) != string(der) || string(cert.RawTBSCertificate) != string(tbs) {
+		t.Error("raw bytes not preserved")
+	}
+	if err := cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature); err != nil {
+		t.Errorf("self-signature: %v", err)
+	}
 }
 
 func TestRSAMissingNULL(t *testing.T) {
@@ -486,44 +501,45 @@ func TestRealWorldCSCA(t *testing.T) {
 		{"testdata/csca_hun_explicit_params.pem", "P-521"},
 		{"testdata/csca_deu_explicit_params.pem", "brainpoolP384r1"},
 	} {
-		t.Run(tc.file, func(t *testing.T) {
-			data, err := os.ReadFile(tc.file)
-			if err != nil {
-				t.Fatal(err)
-			}
-			blk, _ := pem.Decode(data)
-			if blk == nil {
-				t.Fatal("no PEM block")
-			}
-			if _, err := x509.ParseCertificate(blk.Bytes); err == nil || !strings.Contains(err.Error(), "invalid ECDSA parameters") {
-				t.Fatalf("stdlib error = %v, want 'invalid ECDSA parameters'", err)
-			}
-			if _, err := cryptoutil.New().ParseCertificate(blk.Bytes); err == nil {
-				t.Fatal("parsed without Register")
-			}
-			certs, err := registered().ParseCertificatesPEM(data)
-			if err != nil || len(certs) != 1 {
-				t.Fatalf("parse: %v (%d certs)", err, len(certs))
-			}
-			cert := certs[0]
-			pub, ok := cert.PublicKey.(*ecdsa.PublicKey)
-			if !ok {
-				t.Fatalf("PublicKey %T", cert.PublicKey)
-			}
-			if tc.curve != "" && pub.Curve.Params().Name != tc.curve {
-				t.Errorf("curve = %s, want %s", pub.Curve.Params().Name, tc.curve)
-			}
-			t.Logf("%s on %s", cert.Subject, pub.Curve.Params().Name)
-			if string(cert.RawIssuer) != string(cert.RawSubject) {
-				t.Fatal("fixture is not self-issued")
-			}
-			if err := registered().CheckSignature(cert, cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature); err != nil {
-				t.Errorf("CSCA self-signature over the original TBS: %v", err)
-			}
-			h := sha256.Sum256(cert.Raw)
-			t.Logf("sha256(DER)=%x", h)
-		})
+		t.Run(tc.file, func(t *testing.T) { checkRealWorld(t, tc.file, tc.curve) })
 	}
+}
+
+func checkRealWorld(t *testing.T, file, curve string) {
+	t.Helper()
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blk, _ := pem.Decode(data)
+	if blk == nil {
+		t.Fatal("no PEM block")
+	}
+	if _, err := x509.ParseCertificate(blk.Bytes); err == nil || !strings.Contains(err.Error(), "invalid ECDSA parameters") {
+		t.Fatalf("stdlib error = %v, want 'invalid ECDSA parameters'", err)
+	}
+	if _, err := cryptoutil.New().ParseCertificate(blk.Bytes); err == nil {
+		t.Fatal("parsed without Register")
+	}
+	certs, err := registered().ParseCertificatesPEM(data)
+	if err != nil || len(certs) != 1 {
+		t.Fatalf("parse: %v (%d certs)", err, len(certs))
+	}
+	cert := certs[0]
+	pub, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("PublicKey %T", cert.PublicKey)
+	}
+	if pub.Curve.Params().Name != curve {
+		t.Errorf("curve = %s, want %s", pub.Curve.Params().Name, curve)
+	}
+	if string(cert.RawIssuer) != string(cert.RawSubject) {
+		t.Fatal("fixture is not self-issued")
+	}
+	if err := registered().CheckSignature(cert, cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature); err != nil {
+		t.Errorf("CSCA self-signature over the original TBS: %v", err)
+	}
+	t.Logf("%s on %s, sha256(DER)=%x", cert.Subject, curve, sha256.Sum256(cert.Raw))
 }
 
 func rsaEqual(got any, want *rsa.PublicKey) bool {

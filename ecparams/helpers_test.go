@@ -74,7 +74,7 @@ func encodeExplicitParams(k *knownCurve, o paramOpts) []byte {
 	return out
 }
 
-func encodeSPKI(alg []byte, point []byte) []byte {
+func encodeSPKI(alg, point []byte) []byte {
 	var b cryptobyte.Builder
 	b.AddASN1(cbasn1.SEQUENCE, func(b *cryptobyte.Builder) {
 		b.AddASN1(cbasn1.SEQUENCE, func(b *cryptobyte.Builder) { b.AddBytes(alg) })

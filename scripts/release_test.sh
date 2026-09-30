@@ -19,14 +19,14 @@ git clone -q "$tmp/origin.git" "$tmp/w" 2>/dev/null
 cd "$tmp/w" || exit 1
 git config user.email t@example.org; git config user.name t
 mkdir -p scripts brainpool ecparams
-cp "$src"/scripts/release.sh "$src"/scripts/check-nested-modules.sh scripts/
+cp "$src"/scripts/release.sh "$src"/scripts/check-nested-modules.sh "$src"/scripts/check-release-tags.sh "$src"/scripts/run-module-checks.sh "$src"/scripts/lib-modules.sh scripts/
 R=github.com/sirosfoundation/go-cryptoutil
 printf 'module %s\n\ngo 1.26\n' "$R" > go.mod
 printf 'module %s/brainpool\n\ngo 1.26\n\nrequire %s v0.6.0\n' "$R" "$R" > brainpool/go.mod
 printf 'module %s/ecparams\n\ngo 1.26\n\nrequire %s/brainpool v0.2.0\n' "$R" "$R" > ecparams/go.mod
 git add -A; git commit -qm init; git push -q origin HEAD:main
 git tag v0.6.0; git tag brainpool/v0.2.0; git tag ecparams/v0.1.0; git push -q origin --tags
-export RELEASE_SKIP_GO_CHECKS=1
+export RELEASE_SKIP_GO_CHECKS=1 RELEASE_NO_DISPATCH=1
 rel=scripts/release.sh
 
 expect "dry run ok" 0 $rel v0.7.0
@@ -76,12 +76,49 @@ printf 'package x\n' > x.go; printf 'package x\n' > brainpool/x.go; printf 'pack
 printf 'module %s/brainpool\n\ngo 1.26\n' "$R" > brainpool/go.mod
 printf 'module %s/ecparams\n\ngo 1.26\n' "$R" > ecparams/go.mod
 git add -A; git commit -qm code; git push -q origin HEAD:main
-expect "push release" 0 $rel v0.7.0 --push
+# Mock gh on PATH to check the post-push workflow dispatch.
+mkdir -p "$tmp/bin"; export GH_LOG="$tmp/gh.log"; : > "$GH_LOG"
+printf '#!/bin/sh\necho "$*" >> "$GH_LOG"\n[ -z "$GH_FAIL" ]\n' > "$tmp/bin/gh"; chmod +x "$tmp/bin/gh"
+unset RELEASE_NO_DISPATCH
+PATH="$tmp/bin:$PATH" expect "push release" 0 $rel v0.7.0 --push
+grep -qxF 'workflow run release.yml --ref main -f tag=v0.7.0' "$GH_LOG" && ok "release workflow dispatched after push" || bad "dispatch missing: $(cat "$GH_LOG")"
 want="v0.7.0 brainpool/v0.7.0 ecparams/v0.7.0"
 got=$(git ls-remote --tags origin | grep -v '\^{}$' | sed -E 's|.*refs/tags/||' | grep -E '^(v|[a-z]+/v)0\.7\.0$' | sort | tr '\n' ' ')
 [ "$got" = "$(echo $want | tr ' ' '\n' | sort | tr '\n' ' ')" ] && ok "tags pushed to fake remote" || bad "remote tags: $got"
 c=$(git rev-parse 'v0.7.0^{commit}'); [ "$(git rev-parse 'ecparams/v0.7.0^{commit}')" = "$c" ] && ok "same commit" || bad "commit mismatch"
 [ "$(git cat-file -t v0.7.0)" = tag ] && ok "annotated" || bad "not annotated"
 expect "re-release rejected" 1 $rel v0.7.0
+# A failing dispatch is not fatal (tags are already published) and prints the fallback.
+git commit -q --allow-empty -m next-release; git push -q origin HEAD:main
+out=$(GH_FAIL=1 PATH="$tmp/bin:$PATH" $rel v0.7.1 --push 2>&1); rc=$?
+[ "$rc" = 0 ] && echo "$out" | grep -q 'gh workflow run release.yml --ref main -f tag=v0.7.1' \
+    && ok "failed dispatch is non-fatal and prints fallback" || bad "failed dispatch (rc=$rc): $out"
+
+# --- scripts/check-release-tags.sh (what the release workflow runs) ----------
+chk=scripts/check-release-tags.sh
+expect "tags consistent" 0 $chk v0.7.0
+expect "tags consistent and on origin/main" 0 $chk v0.7.0 --on-branch origin/main
+expect "version with no tags" 1 $chk v0.8.0
+expect "not semver" 1 $chk 0.7.0
+expect "injection-shaped tag rejected" 1 $chk 'v0.7.0;echo'
+git checkout -q -b side; git commit -q --allow-empty -m side; git push -q origin side
+git tag -a v0.9.0 -m x; git tag -a brainpool/v0.9.0 -m x; git tag -a ecparams/v0.9.0 -m x; git tag -a pkcs11pool/v0.9.0 -m x
+git push -q origin --tags
+expect "tags complete but commit not on main" 1 $chk v0.9.0 --on-branch origin/main
+git checkout -q main
+git tag -a v0.9.1 -m x; git tag -a brainpool/v0.9.1 -m x   # ecparams/v0.9.1 deliberately missing
+git push -q origin --tags
+expect "missing nested tag rejected" 1 $chk v0.9.1
+git commit -q --allow-empty -m next; git push -q origin HEAD:main
+git tag -a v0.9.2 -m x; git tag -a brainpool/v0.9.2 -m x; git tag -a ecparams/v0.9.2 -m x
+git tag -f brainpool/v0.9.2 -a -m y HEAD~1 >/dev/null 2>&1
+git push -q origin --tags -f
+expect "tags at different commits rejected" 1 $chk v0.9.2
+git tag -a v0.10.0-rc1 -m x; git tag -a brainpool/v0.10.0-rc1 -m x; git tag -a ecparams/v0.10.0-rc1 -m x
+git push -q origin --tags
+expect "prerelease tag set accepted" 0 $chk v0.10.0-rc1
+for bad_v in v0.8.0-. v0.8.0-a..b v0.8.0-01 v0.8.0- v01.0.0 v0.8.0+build; do
+    expect "malformed version $bad_v rejected" 1 $chk "$bad_v"
+done
 
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

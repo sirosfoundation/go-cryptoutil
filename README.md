@@ -225,6 +225,27 @@ greater than every existing tag, and runs vet, race tests and a
 `--push` to create the annotated tags and push them together. Only maintainers
 with permission to push tags to the repository should release.
 
+**GitHub release.** After pushing the tags, `scripts/release.sh --push`
+dispatches `.github/workflows/release.yml` (from `main`) with the new tag via
+the `gh` CLI. (GitHub creates no tag push event when a single push carries more
+than three tags, and a release pushes four; the workflow also has a tag-push
+trigger that only matches the root tag, for tags pushed in smaller batches.)
+Both paths are idempotent. The workflow first verifies that all four tags
+exist on the remote at the same commit, that the commit is on `main`, and that
+vet, tests and build pass for every module; then it creates the GitHub release,
+unless one already exists, in which case it is left untouched (so hand-edited
+notes are never overwritten). The notes are the fenced
+`<!-- release-notes:vX.Y.Z:start -->` block from `RELEASE_NOTES.md` if present,
+otherwise GitHub's generated notes, followed by a fixed footer with the four
+module tags and pin instructions. A tag with a suffix such as `-rc1` is marked
+as a pre-release. If the workflow fails, fix the cause and re-run it from
+Actions, Release, "Run workflow" with the tag as input (or
+`gh workflow run release.yml --ref main -f tag=vX.Y.Z`, which is also the
+fallback when `gh` was unavailable during the release); never delete or move
+the tags. Tag creation should be restricted to maintainers (repository tag
+ruleset), because a pushed tag selects the commit whose scripts the workflow runs. (The workflow runs the scripts of the tagged commit, so it can only be used
+for releases after v0.7.0.) `scripts/check-release-tags.sh vX.Y.Z` runs the tag check locally.
+
 **Retracted version.** `ecparams/v0.1.0` was published under the earlier
 per-module versioning. It stays available (tags are never deleted), but
 `ecparams/go.mod` retracts it, so use the common version line instead. A

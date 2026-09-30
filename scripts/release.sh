@@ -10,6 +10,15 @@
 #   v0.7.0, brainpool/v0.7.0, ecparams/v0.7.0, pkcs11pool/v0.7.0
 # all on the same commit. The module list is discovered from go.mod files.
 #
+# After the push this script dispatches .github/workflows/release.yml (from
+# main) with the new tag, using the gh CLI: GitHub fires no tag push event when
+# one push carries more than three tags, and we push four atomically. The
+# workflow re-verifies that all tags exist at one commit, re-runs the module
+# checks and creates the GitHub release. If gh is missing or the dispatch
+# fails, start it from the Actions tab (Release, Run workflow, input "tag") or
+# `gh workflow run release.yml --ref main -f tag=vX.Y.Z`. If the workflow fails,
+# fix the cause and re-run it; never delete or move tags.
+#
 # This script never edits go.mod files. A nested module may keep requiring an
 # older published root version: Go's minimal version selection picks the
 # highest required version in the consumer's build, which is fine. Bump a
@@ -20,6 +29,7 @@
 #
 # Environment:
 #   REMOTE                        remote to compare with and push to (default origin)
+#   RELEASE_NO_DISPATCH=1         do not dispatch the release workflow after --push
 #   RELEASE_SKIP_GO_CHECKS=1      skip vet/test/build (dry run only; for testing this script)
 set -euo pipefail
 
@@ -51,10 +61,9 @@ git fetch --quiet "$REMOTE" --tags
     || die "HEAD is not equal to $REMOTE/main (pull or push first)"
 
 # --- modules and tags --------------------------------------------------------
-mapfile -t nested < <(find . -mindepth 2 -name go.mod -not -path './.git/*' -printf '%h\n' | sed 's|^\./||' | sort)
-modules=(. "${nested[@]}")
-tags=("$version")
-for d in "${nested[@]}"; do tags+=("$d/$version"); done
+# shellcheck source=scripts/lib-modules.sh
+. scripts/lib-modules.sh
+mapfile -t tags < <(release_tags "$version")
 
 # Strictly greater than every existing tag of every module (local + remote).
 existing=$( { git tag --list; git ls-remote --tags "$REMOTE" | sed -E 's|.*refs/tags/||; s|\^\{\}$||'; } | sort -u)
@@ -72,11 +81,7 @@ scripts/check-nested-modules.sh --check-tags
 if [ "$skip_go" = 1 ]; then
     echo "WARNING: skipping vet/test/build (RELEASE_SKIP_GO_CHECKS=1)" >&2
 else
-    for m in "${modules[@]}"; do
-        echo "== checking module $m"
-        (cd "$m" && go vet -mod=readonly ./... && go test -race -mod=readonly ./... && go build -mod=readonly ./...) \
-            || die "module $m failed vet/test/build"
-    done
+    scripts/run-module-checks.sh || die "module checks failed"
 fi
 
 # The checks must not have modified the tree we are about to tag.
@@ -103,3 +108,14 @@ done
 git push --atomic "$REMOTE" "${tags[@]/#/refs/tags/}" \
     || { git tag -d "${created[@]}" >/dev/null; die "push failed; local tags removed"; }
 echo "Released $version: ${tags[*]}"
+
+# A push of more than three tags creates no tag push event, so start the
+# release workflow explicitly. Not fatal: the tags are already published.
+if [ "${RELEASE_NO_DISPATCH:-0}" = 1 ]; then
+    echo "Skipping workflow dispatch (RELEASE_NO_DISPATCH=1)."
+elif command -v gh >/dev/null 2>&1 && gh workflow run release.yml --ref main -f "tag=$version"; then
+    echo "Dispatched the Release workflow for $version (see the Actions tab)."
+else
+    echo "WARNING: could not dispatch the Release workflow; run it by hand:" >&2
+    echo "  gh workflow run release.yml --ref main -f tag=$version" >&2
+fi

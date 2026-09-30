@@ -186,6 +186,45 @@ func Register(ext *cryptoutil.Extensions) {
 }
 ```
 
+## Versioning and releases
+
+All modules in this repository are released together under **one common
+version number**: the root module and every nested module (`brainpool`,
+`ecparams`, `pkcs11pool`). A release `v0.7.0` consists of the tags `v0.7.0`,
+`brainpool/v0.7.0`, `ecparams/v0.7.0` and `pkcs11pool/v0.7.0` on the same
+commit. Nested modules need the directory-prefixed tag because that is how the
+Go toolchain finds a module that lives in a subdirectory.
+
+**Pinning.** Use the same version for the root and for each nested import path
+you use:
+
+```bash
+go get github.com/sirosfoundation/go-cryptoutil@v0.7.0
+go get github.com/sirosfoundation/go-cryptoutil/ecparams@v0.7.0
+```
+
+A nested `go.mod` may still require an older published root version; that is
+fine under minimal version selection. It is bumped only when the nested code
+needs a newer root API. Nested `go.mod` files must not contain `replace`
+directives (CI enforces this), since consumers would ignore them.
+
+**Releasing.** Merge the PR, then from an up-to-date `main` run
+`scripts/release.sh vX.Y.Z` (dry run: checks the tree, that the version is
+greater than every existing tag, and runs vet, race tests and a
+`-mod=readonly` build for every module), and then the same command with
+`--push` to create the annotated tags and push them together. Only maintainers
+with permission to push tags to the repository should release.
+
+**Retracted version.** `ecparams/v0.1.0` was published under the earlier
+per-module versioning. It stays available (tags are never deleted), but
+`ecparams/go.mod` retracts it, so use the common version line instead. A
+retraction takes effect once a later version containing it is published.
+
+| Common version | Root | brainpool | ecparams | pkcs11pool |
+|----------------|------|-----------|----------|------------|
+| up to v0.6.0 (independent versions) | v0.2.0 to v0.6.0 | v0.2.0 | v0.1.0 (retracted) | v0.1.0, v0.1.1 |
+| v0.7.0 and later | vX.Y.Z | vX.Y.Z | vX.Y.Z | vX.Y.Z |
+
 ## Development
 
 ```bash

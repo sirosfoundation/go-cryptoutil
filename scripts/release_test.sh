@@ -26,7 +26,7 @@ printf 'module %s/brainpool\n\ngo 1.26\n\nrequire %s v0.6.0\n' "$R" "$R" > brain
 printf 'module %s/ecparams\n\ngo 1.26\n\nrequire %s/brainpool v0.2.0\n' "$R" "$R" > ecparams/go.mod
 git add -A; git commit -qm init; git push -q origin HEAD:main
 git tag v0.6.0; git tag brainpool/v0.2.0; git tag ecparams/v0.1.0; git push -q origin --tags
-export RELEASE_SKIP_GO_CHECKS=1
+export RELEASE_SKIP_GO_CHECKS=1 RELEASE_NO_DISPATCH=1
 rel=scripts/release.sh
 
 expect "dry run ok" 0 $rel v0.7.0
@@ -107,5 +107,8 @@ expect "tags at different commits rejected" 1 $chk v0.9.2
 git tag -a v0.10.0-rc1 -m x; git tag -a brainpool/v0.10.0-rc1 -m x; git tag -a ecparams/v0.10.0-rc1 -m x
 git push -q origin --tags
 expect "prerelease tag set accepted" 0 $chk v0.10.0-rc1
+for bad_v in v0.8.0-. v0.8.0-a..b v0.8.0-01 v0.8.0- v01.0.0 v0.8.0+build; do
+    expect "malformed version $bad_v rejected" 1 $chk "$bad_v"
+done
 
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

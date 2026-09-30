@@ -20,7 +20,7 @@ case "${2:-}" in
     --on-branch) branch=${3:-}; [ -n "$branch" ] || exit 2 ;;
     *) exit 2 ;;
 esac
-[[ $version =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]] \
+[[ $version =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$ ]] \
     || die "'$version' is not semver vX.Y.Z[-suffix]"
 
 cd "$(git rev-parse --show-toplevel)"

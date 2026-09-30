@@ -10,11 +10,14 @@
 #   v0.7.0, brainpool/v0.7.0, ecparams/v0.7.0, pkcs11pool/v0.7.0
 # all on the same commit. The module list is discovered from go.mod files.
 #
-# After the push, .github/workflows/release.yml (triggered by the root tag
-# vX.Y.Z only; the prefixed tags do not match its filter) re-verifies that all
-# four tags exist at one commit, re-runs the module checks and then creates the
-# GitHub release. If that workflow fails, fix the cause and re-run it from the
-# Actions tab (workflow_dispatch, input "tag") - do not delete or move tags.
+# After the push this script dispatches .github/workflows/release.yml (from
+# main) with the new tag, using the gh CLI: GitHub fires no tag push event when
+# one push carries more than three tags, and we push four atomically. The
+# workflow re-verifies that all tags exist at one commit, re-runs the module
+# checks and creates the GitHub release. If gh is missing or the dispatch
+# fails, start it from the Actions tab (Release, Run workflow, input "tag") or
+# `gh workflow run release.yml --ref main -f tag=vX.Y.Z`. If the workflow fails,
+# fix the cause and re-run it; never delete or move tags.
 #
 # This script never edits go.mod files. A nested module may keep requiring an
 # older published root version: Go's minimal version selection picks the
@@ -26,6 +29,7 @@
 #
 # Environment:
 #   REMOTE                        remote to compare with and push to (default origin)
+#   RELEASE_NO_DISPATCH=1         do not dispatch the release workflow after --push
 #   RELEASE_SKIP_GO_CHECKS=1      skip vet/test/build (dry run only; for testing this script)
 set -euo pipefail
 
@@ -104,3 +108,14 @@ done
 git push --atomic "$REMOTE" "${tags[@]/#/refs/tags/}" \
     || { git tag -d "${created[@]}" >/dev/null; die "push failed; local tags removed"; }
 echo "Released $version: ${tags[*]}"
+
+# A push of more than three tags creates no tag push event, so start the
+# release workflow explicitly. Not fatal: the tags are already published.
+if [ "${RELEASE_NO_DISPATCH:-0}" = 1 ]; then
+    echo "Skipping workflow dispatch (RELEASE_NO_DISPATCH=1)."
+elif command -v gh >/dev/null 2>&1 && gh workflow run release.yml --ref main -f "tag=$version"; then
+    echo "Dispatched the Release workflow for $version (see the Actions tab)."
+else
+    echo "WARNING: could not dispatch the Release workflow; run it by hand:" >&2
+    echo "  gh workflow run release.yml --ref main -f tag=$version" >&2
+fi

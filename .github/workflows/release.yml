@@ -1,7 +1,13 @@
 # Tag-to-release: turns the tags pushed by scripts/release.sh --push into a
 # GitHub release.
 #
-# Triggered by the ROOT tag only. The filter below is a GitHub Actions pattern,
+# Triggered by the ROOT tag only. NOTE: GitHub creates NO push events when one
+# push contains more than three tags, and scripts/release.sh pushes four
+# (atomically). So in the normal path this trigger never fires; release.sh
+# dispatches this workflow (from main) after the push instead. The push trigger
+# is kept for tags pushed in smaller batches; both paths are idempotent and
+# share a concurrency group.
+# The push filter below is a GitHub Actions pattern,
 # not a plain glob: it must match the whole tag name, so the directory-prefixed
 # module tags (brainpool/v0.7.0, ecparams/v0.7.0, pkcs11pool/v0.7.0) pushed in
 # the same atomic push do NOT trigger it - one release, one run.
@@ -59,9 +65,10 @@ jobs:
           if [ -z "$TAG" ] && [ "$REF_TYPE" = "tag" ]; then
             TAG="$REF_NAME"
           fi
-          # Validate before anything is written to $GITHUB_OUTPUT or reaches a
+          # Semver 2.0 core plus optional dot-separated prerelease identifiers
+          # (no empty ones, no leading zeros in numeric ones). Validate before anything is written to $GITHUB_OUTPUT or reaches a
           # shell: the pattern excludes newlines and every shell metacharacter.
-          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$ ]]; then
             echo "::error::'$TAG' is not a semver release tag (expected vX.Y.Z, optionally -suffix)."
             exit 1
           fi

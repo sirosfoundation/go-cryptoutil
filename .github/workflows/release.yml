@@ -1,0 +1,168 @@
+# Tag-to-release: turns the tags pushed by scripts/release.sh --push into a
+# GitHub release.
+#
+# Triggered by the ROOT tag only. The filter below is a GitHub Actions pattern,
+# not a plain glob: it must match the whole tag name, so the directory-prefixed
+# module tags (brainpool/v0.7.0, ecparams/v0.7.0, pkcs11pool/v0.7.0) pushed in
+# the same atomic push do NOT trigger it - one release, one run.
+#
+# verify : tag is semver, every module tag exists on the remote at the SAME
+#          commit, that commit is on main, vet/test/build pass per module.
+# publish: creates the release if (and only if) it does not exist yet. An
+#          existing release, e.g. one with hand-edited notes, is never touched.
+#
+# If a run fails: fix the cause, then re-run via Actions > Release > Run
+# workflow with the tag as input. Tags are never moved or deleted.
+#
+# No secrets: uses the job's GITHUB_TOKEN only.
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Root tag of the release to (re)create, e.g. v0.8.0'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  GOWORK: 'off'
+
+jobs:
+  verify:
+    name: Verify release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Validate tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          TAG="$INPUT_TAG"
+          # On a manual dispatch from a branch, ref_name is the branch name.
+          if [ -z "$TAG" ] && [ "$REF_TYPE" = "tag" ]; then
+            TAG="$REF_NAME"
+          fi
+          # Validate before anything is written to $GITHUB_OUTPUT or reaches a
+          # shell: the pattern excludes newlines and every shell metacharacter.
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$TAG' is not a semver release tag (expected vX.Y.Z, optionally -suffix)."
+            exit 1
+          fi
+          # Modules without a /vN path suffix can only be v0 or v1.
+          if [[ ! "$TAG" =~ ^v[01]\. ]]; then
+            echo "::error::'$TAG': only v0 and v1 are supported (no /vN module path suffix)."
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Check module tags (all present, one commit, on main)
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: scripts/check-release-tags.sh "$TAG" --on-branch origin/main
+
+      - name: Check nested module requirements
+        run: scripts/check-nested-modules.sh --check-tags
+
+      - name: vet, test, build every module
+        run: scripts/run-module-checks.sh
+
+  publish:
+    name: Publish GitHub release
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.verify.outputs.tag }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ needs.verify.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Create release if missing
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; leaving it untouched."
+            exit 0
+          fi
+
+          # Body: a bot-written fenced block for this tag in RELEASE_NOTES.md
+          # (the tagged commit's copy first, then main's, which picks up a
+          # merged release-notes-bot PR on a re-run), else GitHub's generated notes.
+          start="<!-- release-notes:${TAG}:start -->"
+          end="<!-- release-notes:${TAG}:end -->"
+          extract() { # stdin: file content
+            awk -v s="$start" -v e="$end" '
+              $0==s {on=1; next}
+              $0==e {if (on) found=1; on=0}
+              on {print}
+              END {exit !found}'
+          }
+          notes="$RUNNER_TEMP/notes.md"
+          : > "$notes"
+          if [ -f RELEASE_NOTES.md ] && extract < RELEASE_NOTES.md > "$notes.tmp"; then
+            mv "$notes.tmp" "$notes"
+          elif git show origin/main:RELEASE_NOTES.md 2>/dev/null | extract > "$notes.tmp"; then
+            mv "$notes.tmp" "$notes"
+          fi
+
+          if [ ! -s "$notes" ]; then
+            # Previous plain root tag below this version (prefixed module tags
+            # never match the anchored pattern). Passed explicitly so GitHub does
+            # not pick a nested-module tag as the comparison base.
+            base=${TAG%%-*}
+            prev=$( { git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } \
+              | { grep -vxF "$base" || true; } | { echo "$base"; cat; } | sort -V \
+              | awk -v b="$base" '$0==b {print prev; exit} {prev=$0}')
+            args=(-f "tag_name=$TAG")
+            [ -z "$prev" ] || args+=(-f "previous_tag_name=$prev")
+            gh api -X POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" "${args[@]}" --jq .body > "$notes"
+          fi
+
+          cat >> "$notes" <<FOOTER
+
+          ---
+          This release is versioned as one unit. It consists of the module tags
+          \`$TAG\`, \`brainpool/$TAG\`, \`ecparams/$TAG\` and \`pkcs11pool/$TAG\`, all at the
+          same commit. Pin the same version for every module you import:
+
+          \`\`\`
+          go get github.com/sirosfoundation/go-cryptoutil@$TAG
+          go get github.com/sirosfoundation/go-cryptoutil/brainpool@$TAG
+          go get github.com/sirosfoundation/go-cryptoutil/ecparams@$TAG
+          go get github.com/sirosfoundation/go-cryptoutil/pkcs11pool@$TAG
+          \`\`\`
+          FOOTER
+
+          flags=()
+          [[ "$TAG" == *-* ]] && flags+=(--prerelease)
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$notes" "${flags[@]}"

@@ -19,7 +19,7 @@ git clone -q "$tmp/origin.git" "$tmp/w" 2>/dev/null
 cd "$tmp/w" || exit 1
 git config user.email t@example.org; git config user.name t
 mkdir -p scripts brainpool ecparams
-cp "$src"/scripts/release.sh "$src"/scripts/check-nested-modules.sh scripts/
+cp "$src"/scripts/release.sh "$src"/scripts/check-nested-modules.sh "$src"/scripts/check-release-tags.sh "$src"/scripts/run-module-checks.sh "$src"/scripts/lib-modules.sh scripts/
 R=github.com/sirosfoundation/go-cryptoutil
 printf 'module %s\n\ngo 1.26\n' "$R" > go.mod
 printf 'module %s/brainpool\n\ngo 1.26\n\nrequire %s v0.6.0\n' "$R" "$R" > brainpool/go.mod
@@ -83,5 +83,29 @@ got=$(git ls-remote --tags origin | grep -v '\^{}$' | sed -E 's|.*refs/tags/||' 
 c=$(git rev-parse 'v0.7.0^{commit}'); [ "$(git rev-parse 'ecparams/v0.7.0^{commit}')" = "$c" ] && ok "same commit" || bad "commit mismatch"
 [ "$(git cat-file -t v0.7.0)" = tag ] && ok "annotated" || bad "not annotated"
 expect "re-release rejected" 1 $rel v0.7.0
+
+# --- scripts/check-release-tags.sh (what the release workflow runs) ----------
+chk=scripts/check-release-tags.sh
+expect "tags consistent" 0 $chk v0.7.0
+expect "tags consistent and on origin/main" 0 $chk v0.7.0 --on-branch origin/main
+expect "version with no tags" 1 $chk v0.8.0
+expect "not semver" 1 $chk 0.7.0
+expect "injection-shaped tag rejected" 1 $chk 'v0.7.0;echo'
+git checkout -q -b side; git commit -q --allow-empty -m side; git push -q origin side
+git tag -a v0.9.0 -m x; git tag -a brainpool/v0.9.0 -m x; git tag -a ecparams/v0.9.0 -m x; git tag -a pkcs11pool/v0.9.0 -m x
+git push -q origin --tags
+expect "tags complete but commit not on main" 1 $chk v0.9.0 --on-branch origin/main
+git checkout -q main
+git tag -a v0.9.1 -m x; git tag -a brainpool/v0.9.1 -m x   # ecparams/v0.9.1 deliberately missing
+git push -q origin --tags
+expect "missing nested tag rejected" 1 $chk v0.9.1
+git commit -q --allow-empty -m next; git push -q origin HEAD:main
+git tag -a v0.9.2 -m x; git tag -a brainpool/v0.9.2 -m x; git tag -a ecparams/v0.9.2 -m x
+git tag -f brainpool/v0.9.2 -a -m y HEAD~1 >/dev/null 2>&1
+git push -q origin --tags -f
+expect "tags at different commits rejected" 1 $chk v0.9.2
+git tag -a v0.10.0-rc1 -m x; git tag -a brainpool/v0.10.0-rc1 -m x; git tag -a ecparams/v0.10.0-rc1 -m x
+git push -q origin --tags
+expect "prerelease tag set accepted" 0 $chk v0.10.0-rc1
 
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

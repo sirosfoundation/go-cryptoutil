@@ -215,6 +215,22 @@ greater than every existing tag, and runs vet, race tests and a
 `--push` to create the annotated tags and push them together. Only maintainers
 with permission to push tags to the repository should release.
 
+**GitHub release.** Pushing the root tag `vX.Y.Z` triggers
+`.github/workflows/release.yml` (the prefixed module tags do not match its tag
+filter, so there is one run per release). It first verifies that all four tags
+exist on the remote at the same commit, that the commit is on `main`, and that
+vet, tests and build pass for every module; then it creates the GitHub release,
+unless one already exists, in which case it is left untouched (so hand-edited
+notes are never overwritten). The notes are the fenced
+`<!-- release-notes:vX.Y.Z:start -->` block from `RELEASE_NOTES.md` if present,
+otherwise GitHub's generated notes, followed by a fixed footer with the four
+module tags and pin instructions. A tag with a suffix such as `-rc1` is marked
+as a pre-release. If the workflow fails, fix the cause and re-run it from
+Actions, Release, "Run workflow" with the tag as input; never delete or move
+the tags. (The workflow checks out the tag, so it can only be re-run for a
+version whose tag contains `scripts/check-release-tags.sh`, that is, releases
+after v0.7.0.) `scripts/check-release-tags.sh vX.Y.Z` runs the tag check locally.
+
 **Retracted version.** `ecparams/v0.1.0` was published under the earlier
 per-module versioning. It stays available (tags are never deleted), but
 `ecparams/go.mod` retracts it, so use the common version line instead. A

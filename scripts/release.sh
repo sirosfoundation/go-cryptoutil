@@ -10,6 +10,12 @@
 #   v0.7.0, brainpool/v0.7.0, ecparams/v0.7.0, pkcs11pool/v0.7.0
 # all on the same commit. The module list is discovered from go.mod files.
 #
+# After the push, .github/workflows/release.yml (triggered by the root tag
+# vX.Y.Z only; the prefixed tags do not match its filter) re-verifies that all
+# four tags exist at one commit, re-runs the module checks and then creates the
+# GitHub release. If that workflow fails, fix the cause and re-run it from the
+# Actions tab (workflow_dispatch, input "tag") - do not delete or move tags.
+#
 # This script never edits go.mod files. A nested module may keep requiring an
 # older published root version: Go's minimal version selection picks the
 # highest required version in the consumer's build, which is fine. Bump a
@@ -51,10 +57,9 @@ git fetch --quiet "$REMOTE" --tags
     || die "HEAD is not equal to $REMOTE/main (pull or push first)"
 
 # --- modules and tags --------------------------------------------------------
-mapfile -t nested < <(find . -mindepth 2 -name go.mod -not -path './.git/*' -printf '%h\n' | sed 's|^\./||' | sort)
-modules=(. "${nested[@]}")
-tags=("$version")
-for d in "${nested[@]}"; do tags+=("$d/$version"); done
+# shellcheck source=scripts/lib-modules.sh
+. scripts/lib-modules.sh
+mapfile -t tags < <(release_tags "$version")
 
 # Strictly greater than every existing tag of every module (local + remote).
 existing=$( { git tag --list; git ls-remote --tags "$REMOTE" | sed -E 's|.*refs/tags/||; s|\^\{\}$||'; } | sort -u)
@@ -72,11 +77,7 @@ scripts/check-nested-modules.sh --check-tags
 if [ "$skip_go" = 1 ]; then
     echo "WARNING: skipping vet/test/build (RELEASE_SKIP_GO_CHECKS=1)" >&2
 else
-    for m in "${modules[@]}"; do
-        echo "== checking module $m"
-        (cd "$m" && go vet -mod=readonly ./... && go test -race -mod=readonly ./... && go build -mod=readonly ./...) \
-            || die "module $m failed vet/test/build"
-    done
+    scripts/run-module-checks.sh || die "module checks failed"
 fi
 
 # The checks must not have modified the tree we are about to tag.

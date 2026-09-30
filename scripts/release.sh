@@ -71,10 +71,13 @@ if [ "$skip_go" = 1 ]; then
 else
     for m in "${modules[@]}"; do
         echo "== checking module $m"
-        (cd "$m" && go vet ./... && go test -race ./... && go build -mod=readonly ./...) \
+        (cd "$m" && go vet -mod=readonly ./... && go test -race -mod=readonly ./... && go build -mod=readonly ./...) \
             || die "module $m failed vet/test/build"
     done
 fi
+
+# The checks must not have modified the tree we are about to tag.
+[ -z "$(git status --porcelain)" ] || die "module checks modified the working tree"
 
 # --- tag and push ------------------------------------------------------------
 commit=$(git rev-parse HEAD)

@@ -11,10 +11,11 @@ import (
 	"testing"
 
 	gematik "github.com/gematik/zero-lab/go/brainpool"
+
 	"github.com/sirosfoundation/go-cryptoutil"
 )
 
-// The tests in this file pin the externally visible behaviour of the plugin
+// The tests in this file pin the externally visible behavior of the plugin
 // for every supported curve with real Brainpool keys and certificates, so
 // that a change of the underlying gematik library (the removal of
 // CurveFromOID in v1.1.0 was the reason for them) can be shown not to change
@@ -180,7 +181,7 @@ func indexOf(name string) int {
 }
 
 // A certificate that crypto/x509 (and so the gematik parser) cannot parse but
-// whose SPKI is intact is still recognised through the raw-SPKI fallback and
+// whose SPKI is intact is still recognized through the raw-SPKI fallback and
 // yields a minimal certificate carrying the key and the raw DER.
 func TestParserSPKIFallbackEveryCurve(t *testing.T) {
 	for _, c := range bpCurves() {

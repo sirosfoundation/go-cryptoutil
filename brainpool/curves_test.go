@@ -61,6 +61,11 @@ func genKey(t *testing.T, c bpCurve) *ecdsa.PrivateKey {
 // (an already DER-encoded element) and public key bits.
 func spkiDER(t *testing.T, params asn1.RawValue, point []byte) []byte {
 	t.Helper()
+	return spkiDERAlg(t, asn1.ObjectIdentifier{1, 2, 840, 10045, 2, 1}, params, point)
+}
+
+func spkiDERAlg(t *testing.T, alg asn1.ObjectIdentifier, params asn1.RawValue, point []byte) []byte {
+	t.Helper()
 	der, err := asn1.Marshal(struct {
 		Algorithm struct {
 			Algorithm  asn1.ObjectIdentifier
@@ -71,7 +76,7 @@ func spkiDER(t *testing.T, params asn1.RawValue, point []byte) []byte {
 		Algorithm: struct {
 			Algorithm  asn1.ObjectIdentifier
 			Parameters asn1.RawValue
-		}{asn1.ObjectIdentifier{1, 2, 840, 10045, 2, 1}, params},
+		}{alg, params},
 		PublicKey: asn1.BitString{Bytes: point, BitLength: len(point) * 8},
 	})
 	if err != nil {
@@ -303,6 +308,19 @@ func TestParseBrainpoolSPKI(t *testing.T) {
 			}
 			if _, err := parseBrainpoolSPKI(spkiDER(t, oidParam(t, c.oid), point)); err == nil {
 				t.Errorf("%s: out-of-range coordinate accepted", c.name)
+			}
+		}
+	})
+	t.Run("key algorithm must be id-ecPublicKey", func(t *testing.T) {
+		c := bpCurves()[0]
+		point := uncompressed(c, &genKey(t, c).PublicKey)
+		for name, alg := range map[string]asn1.ObjectIdentifier{
+			"unassigned X9.62 arc": {1, 2, 840, 10045, 2, 2},
+			"rsaEncryption":        {1, 2, 840, 113549, 1, 1, 1},
+			"ecdh":                 {1, 3, 132, 1, 12},
+		} {
+			if _, err := parseBrainpoolSPKI(spkiDERAlg(t, alg, oidParam(t, c.oid), point)); err == nil {
+				t.Errorf("%s: accepted as Brainpool", name)
 			}
 		}
 	})

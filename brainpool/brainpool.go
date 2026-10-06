@@ -22,6 +22,8 @@ import (
 	cbasn1 "golang.org/x/crypto/cryptobyte/asn1"
 )
 
+var oidECPublicKey = asn1.ObjectIdentifier{1, 2, 840, 10045, 2, 1}
+
 // Register adds brainpool certificate parsing, signature verification,
 // private key parsing, and algorithm mappings to ext.
 func Register(ext *cryptoutil.Extensions) {
@@ -136,6 +138,12 @@ func parseBrainpoolSPKI(raw []byte) (*ecdsa.PublicKey, error) {
 	}
 	if _, err := asn1.Unmarshal(raw, &spki); err != nil {
 		return nil, err
+	}
+	// Only id-ecPublicKey (RFC 5480) can carry a named EC curve; an SPKI with
+	// any other algorithm must not be claimed as a Brainpool key just
+	// because its parameters look like a Brainpool OID.
+	if !spki.Algorithm.Algorithm.Equal(oidECPublicKey) {
+		return nil, errors.New("not an id-ecPublicKey key")
 	}
 	curve, ok := curveFromOID(spki.Algorithm.Parameters)
 	if !ok {

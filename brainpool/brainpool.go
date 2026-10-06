@@ -148,7 +148,14 @@ func parseBrainpoolSPKI(raw []byte) (*ecdsa.PublicKey, error) {
 	}
 	x := new(big.Int).SetBytes(keyBytes[1 : 1+byteLen])
 	y := new(big.Int).SetBytes(keyBytes[1+byteLen:])
-	return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
+	pub := &ecdsa.PublicKey{Curve: curve, X: x, Y: y}
+	// Same validation gematik's own certificate parser applies (coordinates
+	// in range, point on the curve): a key taken from a raw SPKI that no
+	// parser accepted must not skip it.
+	if err := gematik.ValidatePublicKey(pub); err != nil {
+		return nil, err
+	}
+	return pub, nil
 }
 
 // curveOIDs maps the named-curve OIDs of RFC 5639 section 4.1 to the curves.

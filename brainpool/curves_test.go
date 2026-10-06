@@ -287,6 +287,24 @@ func TestParseBrainpoolSPKI(t *testing.T) {
 		})
 	}
 
+	t.Run("point not on the curve", func(t *testing.T) {
+		for _, c := range bpCurves() {
+			key := genKey(t, c)
+			point := uncompressed(c, &key.PublicKey)
+			point[len(point)-1] ^= 0x01 // y -> y+-1: off the curve
+			if _, err := parseBrainpoolSPKI(spkiDER(t, oidParam(t, c.oid), point)); err == nil {
+				t.Errorf("%s: off-curve point accepted", c.name)
+			}
+			// Coordinate >= p.
+			point = uncompressed(c, &key.PublicKey)
+			for i := 1; i <= c.size; i++ {
+				point[i] = 0xFF
+			}
+			if _, err := parseBrainpoolSPKI(spkiDER(t, oidParam(t, c.oid), point)); err == nil {
+				t.Errorf("%s: out-of-range coordinate accepted", c.name)
+			}
+		}
+	})
 	t.Run("explicit domain parameters are not a named curve", func(t *testing.T) {
 		key := genKey(t, bpCurves()[0])
 		explicit := asn1.RawValue{FullBytes: []byte{0x30, 0x03, 0x02, 0x01, 0x01}}

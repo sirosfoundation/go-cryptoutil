@@ -137,7 +137,7 @@ func parseBrainpoolSPKI(raw []byte) (*ecdsa.PublicKey, error) {
 	if _, err := asn1.Unmarshal(raw, &spki); err != nil {
 		return nil, err
 	}
-	ok, curve := gematik.CurveFromOID(spki.Algorithm.Parameters)
+	curve, ok := curveFromOID(spki.Algorithm.Parameters)
 	if !ok {
 		return nil, errors.New("not a brainpool curve")
 	}
@@ -149,6 +149,29 @@ func parseBrainpoolSPKI(raw []byte) (*ecdsa.PublicKey, error) {
 	x := new(big.Int).SetBytes(keyBytes[1 : 1+byteLen])
 	y := new(big.Int).SetBytes(keyBytes[1+byteLen:])
 	return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
+}
+
+// curveOIDs maps the named-curve OIDs of RFC 5639 section 4.1 to the curves.
+// Identification is by exact OID match against this fixed table; anything
+// else, including the twisted t1 curves and the NIST curves, is not ours.
+// (gematik's exported CurveFromOID, which this replaces, was removed in
+// brainpool v1.1.0.)
+var curveOIDs = []struct {
+	oid   asn1.ObjectIdentifier
+	curve func() elliptic.Curve
+}{
+	{asn1.ObjectIdentifier{1, 3, 36, 3, 3, 2, 8, 1, 1, 7}, gematik.P256r1},
+	{asn1.ObjectIdentifier{1, 3, 36, 3, 3, 2, 8, 1, 1, 11}, gematik.P384r1},
+	{asn1.ObjectIdentifier{1, 3, 36, 3, 3, 2, 8, 1, 1, 13}, gematik.P512r1},
+}
+
+func curveFromOID(oid asn1.ObjectIdentifier) (elliptic.Curve, bool) {
+	for _, c := range curveOIDs {
+		if c.oid.Equal(oid) {
+			return c.curve(), true
+		}
+	}
+	return nil, false
 }
 
 // Verifier verifies signatures on certificates with brainpool public keys.

@@ -234,6 +234,23 @@ func buildMinimalBrainpoolCert(t *testing.T, key *ecdsa.PrivateKey) []byte {
 
 func buildASN1Cert(t *testing.T, key *ecdsa.PrivateKey) []byte {
 	t.Helper()
+	return buildASN1CertOpts(t, key, certOpts{})
+}
+
+// certOpts tweaks buildASN1CertOpts to produce deliberately unusual
+// certificates. The zero value gives the default ecdsa-with-SHA256 cert.
+type certOpts struct {
+	// sigAlgOID replaces the signature algorithm OID in both places.
+	sigAlgOID asn1.ObjectIdentifier
+	// notBefore replaces the notBefore UTCTime content (e.g. to make
+	// crypto/x509 reject the certificate while the SPKI stays walkable).
+	notBefore string
+	// curveOID replaces the named-curve OID in the SPKI.
+	curveOID asn1.ObjectIdentifier
+}
+
+func buildASN1CertOpts(t *testing.T, key *ecdsa.PrivateKey, opts certOpts) []byte {
+	t.Helper()
 
 	// Build a minimal X.509v1 certificate in DER using low-level ASN.1.
 	// v1 has no explicit version tag, so the TBS starts with serialNumber.
@@ -241,6 +258,9 @@ func buildASN1Cert(t *testing.T, key *ecdsa.PrivateKey) []byte {
 	oidECPublicKey := asn1.ObjectIdentifier{1, 2, 840, 10045, 2, 1}
 	oidBrainpoolP256r1 := asn1.ObjectIdentifier{1, 3, 36, 3, 3, 2, 8, 1, 1, 7}
 	oidECDSAWithSHA256 := asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 2}
+	if opts.sigAlgOID != nil {
+		oidECDSAWithSHA256 = opts.sigAlgOID
+	}
 
 	curveSize := (key.Curve.Params().BitSize + 7) / 8
 	switch key.Curve.Params().Name {
@@ -250,6 +270,10 @@ func buildASN1Cert(t *testing.T, key *ecdsa.PrivateKey) []byte {
 	case "brainpoolP512r1":
 		oidBrainpoolP256r1 = asn1.ObjectIdentifier{1, 3, 36, 3, 3, 2, 8, 1, 1, 13}
 		curveSize = 64
+	}
+
+	if opts.curveOID != nil {
+		oidBrainpoolP256r1 = opts.curveOID
 	}
 
 	// Encode public key point (uncompressed)
@@ -276,7 +300,11 @@ func buildASN1Cert(t *testing.T, key *ecdsa.PrivateKey) []byte {
 	})
 
 	// Marshal validity (UTCTime)
-	notBefore := asn1.RawValue{Tag: 23, Class: 0, IsCompound: false, Bytes: []byte("250101000000Z")}
+	nb := "250101000000Z"
+	if opts.notBefore != "" {
+		nb = opts.notBefore
+	}
+	notBefore := asn1.RawValue{Tag: 23, Class: 0, IsCompound: false, Bytes: []byte(nb)}
 	notAfter := asn1.RawValue{Tag: 23, Class: 0, IsCompound: false, Bytes: []byte("350101000000Z")}
 	validityDER, _ := asn1.Marshal(struct {
 		NotBefore asn1.RawValue

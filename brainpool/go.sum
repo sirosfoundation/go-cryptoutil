@@ -1,7 +1,7 @@
 github.com/gematik/zero-lab/go/brainpool v1.1.0 h1:o6Uzb+uJRDKGmo0uZgUIBlWiZDbku/RxLMAkJ819qKE=
 github.com/gematik/zero-lab/go/brainpool v1.1.0/go.mod h1:NEF6dqa3qZb0E/CPlu5FKVbo0Y93XeFfV24P7FwqGoc=
-github.com/sirosfoundation/go-cryptoutil v0.6.0 h1:NmmHCZ/3ETuHlC1X4+0ce5QB6XI+IIKv2g4pymFQIr8=
-github.com/sirosfoundation/go-cryptoutil v0.6.0/go.mod h1:6JWcg/wLtALH2x6Hofa6VYX4b6XKiMNfXAVjp4yv9CA=
+github.com/sirosfoundation/go-cryptoutil v0.7.1 h1:cJsv4YQ3Wtj0m3mlTprKXh2B2NkAtOPHicmFhjgK8ic=
+github.com/sirosfoundation/go-cryptoutil v0.7.1/go.mod h1:6JWcg/wLtALH2x6Hofa6VYX4b6XKiMNfXAVjp4yv9CA=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
 go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
